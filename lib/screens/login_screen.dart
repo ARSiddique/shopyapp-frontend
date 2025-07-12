@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_data_provider.dart';
-import 'home_screen.dart'; // Admin
-import 'manager_home_screen.dart'; // Create this for manager
-import 'employee_home_screen.dart'; // Create this for employee
+import 'home_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -13,90 +11,75 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final TextEditingController usernameController = TextEditingController();
-  final TextEditingController passwordController = TextEditingController();
+  final TextEditingController nameController = TextEditingController();
+  final TextEditingController codeController = TextEditingController();
 
-void handleLogin() {
-    final enteredUsername = usernameController.text.trim();
-    final enteredPassword = passwordController.text.trim();
+  void handleLogin() {
+    final enteredCode = codeController.text.trim();
 
-    final appData = Provider.of<AppDataProvider>(context, listen: false);
+    final isAdmin =
+        nameController.text.trim().toLowerCase() == 'admin' &&
+        enteredCode == '1234';
 
-    // Check if admin
-    if (enteredUsername == "admin" && enteredPassword == "1234") {
+    if (isAdmin) {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const HomeScreen()),
       );
-      return;
-    }
-
-    // Check for employee/manager login using code only
-    final success = appData.login(
-      enteredPassword,
-    ); // assuming loginCode is password field here
-    if (success) {
-      final user = appData.loggedInUser;
-      if (user != null) {
-        if (user['role'] == 'manager') {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => const ManagerHomeScreen()),
-          );
-        } else if (user['role'] == 'employee') {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => const EmployeeHomeScreen()),
-          );
-        }
-      }
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Invalid credentials"),
-          backgroundColor: Colors.red,
-        ),
-      );
+      final appData = Provider.of<AppDataProvider>(context, listen: false);
+      final success = appData.login(enteredCode);
+      if (success) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const HomeScreen()),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Invalid login code"),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
-
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey[100],
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 30),
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: Center(
           child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 30),
             child: Column(
               children: [
-                const Icon(
-                  Icons.storefront,
-                  size: 64,
-                  color: Colors.deepPurple,
-                ),
-                const SizedBox(height: 16),
+                // Logo
+                Image.asset('assets/logo/shopy_logo.png', height: 120),
+                const SizedBox(height: 30),
+
                 const Text(
-                  "Shopy Login",
+                  "Welcome to Shopy",
                   style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 30),
 
                 TextField(
-                  controller: usernameController,
+                  controller: nameController,
                   decoration: const InputDecoration(
-                    labelText: "Name / Username",
+                    labelText: "Name",
                     border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.person),
                   ),
                 ),
                 const SizedBox(height: 20),
-
                 TextField(
-                  controller: passwordController,
+                  controller: codeController,
                   decoration: const InputDecoration(
-                    labelText: "Password / Login Code",
+                    labelText: "Login Code",
                     border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.lock),
                   ),
                   obscureText: true,
                 ),
@@ -104,13 +87,21 @@ void handleLogin() {
 
                 SizedBox(
                   width: double.infinity,
-                  child: ElevatedButton(
+                  child: ElevatedButton.icon(
                     onPressed: handleLogin,
+                    icon: const Icon(Icons.login, color: Colors.white),
+                    label: const Text("Login"),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.deepPurple,
+                      foregroundColor: Colors.white, // Text + icon color
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(
+                          12,
+                        ), // Rounded corners
+                      ),
                       padding: const EdgeInsets.symmetric(vertical: 14),
+                      textStyle: const TextStyle(fontSize: 16),
                     ),
-                    child: const Text("Login", style: TextStyle(fontSize: 16)),
                   ),
                 ),
               ],
