@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -17,12 +19,72 @@ import '../screens/orders_screen.dart';
 import '../screens/add_order_screen.dart';
 import '../screens/sales_screen.dart';
 import '../screens/admin_orders_screen.dart';
+import '../screens/login_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
+}
+
+void showPlatformLogoutDialog(BuildContext context) {
+  final appData = Provider.of<AppDataProvider>(context, listen: false);
+
+  if (Platform.isIOS) {
+    showCupertinoDialog(
+      context: context,
+      builder: (ctx) => CupertinoAlertDialog(
+        title: const Text("Logout?"),
+        content: const Text("Are you sure you want to logout from Shopy App?"),
+        actions: [
+          CupertinoDialogAction(
+            child: const Text("Cancel"),
+            onPressed: () => Navigator.of(ctx).pop(),
+          ),
+          CupertinoDialogAction(
+            isDestructiveAction: true,
+            child: const Text("Logout"),
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              appData.logout();
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
+                (_) => false,
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  } else {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Logout"),
+        content: const Text("Are you sure you want to logout?"),
+        actions: [
+          TextButton(
+            child: const Text("Cancel"),
+            onPressed: () => Navigator.of(ctx).pop(),
+          ),
+          TextButton(
+            child: const Text("Logout"),
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              appData.logout();
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
+                (_) => false,
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _HomeScreenState extends State<HomeScreen> {
@@ -64,9 +126,18 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Shopy App"),
+        title: const Text(
+          "Shopy App",
+          style: TextStyle(color: Colors.white), // White title text
+        ),
         backgroundColor: Colors.deepPurple,
-        elevation: 4,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout, color: Colors.red), // 🔴 Red icon
+            tooltip: "Logout",
+            onPressed: () => showPlatformLogoutDialog(context),
+          ),
+        ],
       ),
       body: pages[_selectedIndex],
       bottomNavigationBar: BottomNavigationBar(
@@ -161,7 +232,7 @@ class HomeDashboard extends StatelessWidget {
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
-           Wrap(
+            Wrap(
               spacing: 20,
               runSpacing: 20,
               alignment: WrapAlignment.spaceAround,
