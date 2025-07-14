@@ -14,18 +14,30 @@ class QuickActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return InkWell(
       onTap: onTap,
+      borderRadius: BorderRadius.circular(40),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Material(
-            elevation: 3,
+            elevation: 4,
             shape: const CircleBorder(),
-            color: Colors.deepPurple.shade100,
+            color: isDark
+                ? Colors.deepPurple.shade700.withAlpha(
+                    51,
+                  ) // Because 255 * 0.2 = 51
+
+                : Colors.deepPurple.shade100,
             child: Padding(
-              padding: const EdgeInsets.all(12.0),
-              child: Icon(icon, size: 28, color: Colors.deepPurple),
+              padding: const EdgeInsets.all(14.0),
+              child: Icon(
+                icon,
+                size: 28,
+                color: isDark ? Colors.deepPurple.shade200 : Colors.deepPurple,
+              ),
             ),
           ),
           const SizedBox(height: 8),
@@ -34,8 +46,9 @@ class QuickActionButton extends StatelessWidget {
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w500,
-              color: Colors.black87,
+              color: isDark ? Colors.white70 : Colors.black87,
             ),
+            textAlign: TextAlign.center,
           ),
         ],
       ),

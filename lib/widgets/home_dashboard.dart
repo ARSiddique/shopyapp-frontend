@@ -10,9 +10,9 @@ import '../utils/logger.dart';
 import '../screens/add_order_screen.dart';
 import '../screens/add_sale_screen.dart';
 import '../screens/profile_screen.dart';
-import '../screens/add_employee_screen.dart';
+import '../screens/add_employee_and_access_screen.dart';
 import '../screens/add_shop_screen.dart';
-import '../screens/assign_access_screen.dart';
+import '../screens/add_employee_and_access_screen.dart';
 import '../screens/admin_orders_screen.dart';
 import '../screens/reports_screen.dart';
 
@@ -173,7 +173,7 @@ class HomeDashboard extends StatelessWidget {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => const AddEmployeeScreen(),
+                          builder: (_) => const AddEmployeeAndAccessScreen(),
                         ),
                       );
                     },
@@ -185,7 +185,7 @@ class HomeDashboard extends StatelessWidget {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => const AssignAccessScreen(),
+                          builder: (_) => const AddEmployeeAndAccessScreen(),
                         ),
                       );
                     },
@@ -248,17 +248,21 @@ class HomeDashboard extends StatelessWidget {
                     itemCount: shops.length >= 3 ? 3 : shops.length,
                     itemBuilder: (_, index) {
                       final shop = shops[index];
+
+                      final employeeList = (shop['employees'] ?? []) as List;
+                      final employeeCount = employeeList.length;
+
                       final orderCount = appData.orders
-                          .where((o) => o['shop'] == shop['name'])
+                          .where((order) => order['shop'] == shop['name'])
                           .length;
+
                       return ShopCard(
                         shopName: shop['name'],
-                        employees: shop['employees'],
+                        employees: employeeCount, // ✅ CORRECT
                         isOpen: shop['isOpen'],
                         orderCount: orderCount,
-                        onCheckIn: () => log.info(
-                          "Checked in to ${shop['name']} by ${user?['name']}",
-                        ),
+                        onCheckIn: () =>
+                            log.info("Checked into ${shop['name']}"),
                       );
                     },
                   ),

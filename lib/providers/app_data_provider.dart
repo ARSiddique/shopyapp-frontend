@@ -1,24 +1,33 @@
 import 'package:flutter/material.dart';
 
 class AppDataProvider extends ChangeNotifier {
-  // 🔹 Data Stores
+  // Data Stores
   List<Map<String, dynamic>> orders = [];
   List<Map<String, dynamic>> sales = [];
   List<Map<String, dynamic>> shops = [];
   List<Map<String, dynamic>> employees = [];
 
-  // 🔐 Logged-in User
+  // Logged-in User
   Map<String, dynamic>? _loggedInUser;
-
   Map<String, dynamic>? get loggedInUser => _loggedInUser;
+  Map<String, dynamic> getEmployeeByName(String name) {
+    return employees.firstWhere((emp) => emp['name'] == name, orElse: () => {});
+  }
 
-  // ✅ Login Function
+  // Login
   bool login(String code) {
+    if (code.isEmpty || employees.isEmpty) return false;
     try {
-      final user = employees.firstWhere((e) => e['loginCode'] == code);
-      _loggedInUser = user;
-      notifyListeners();
-      return true;
+      final user = employees.firstWhere(
+        (e) => e['loginCode'] == code,
+        orElse: () => {},
+      );
+      if (user.isNotEmpty) {
+        _loggedInUser = user;
+        notifyListeners();
+        return true;
+      }
+      return false;
     } catch (e) {
       return false;
     }
@@ -29,31 +38,58 @@ class AppDataProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ✅ Add Employee (via AddEmployeeScreen)
   void addEmployee(Map<String, dynamic> employeeData) {
-    employees.add(employeeData);
-    notifyListeners();
-  }
+    if (employeeData.isNotEmpty) {
+      employees.add(employeeData);
 
-  // ✅ Assign Role + Shops (via AssignAccessScreen)
-  void assignAccess(String name, String role, List<String> assignedShops) {
-    final index = employees.indexWhere((e) => e['name'] == name);
-    if (index != -1) {
-      employees[index]['role'] = role;
-      employees[index]['assignedShops'] = assignedShops;
+      final String name = employeeData['name'];
+      final List<String> assignedShops = List<String>.from(
+        employeeData['assignedShops'] ?? [],
+      );
+
+      for (String shopName in assignedShops) {
+        final index = shops.indexWhere((s) => s['name'] == shopName);
+        if (index != -1) {
+          final existingEmployees = List<String>.from(
+            shops[index]['employees'] ?? [],
+          );
+          if (!existingEmployees.contains(name)) {
+            existingEmployees.add(name);
+            shops[index]['employees'] = existingEmployees;
+          }
+        }
+      }
+
       notifyListeners();
     }
   }
 
-  // 🔹 Add Order
+  void assignAccess(String shopName, String employeeName) {
+    final shopIndex = shops.indexWhere((shop) => shop['name'] == shopName);
+
+    if (shopIndex != -1) {
+      final shop = shops[shopIndex];
+
+      final currentEmployees = List<String>.from(shop['employees'] ?? []);
+
+      if (!currentEmployees.contains(employeeName)) {
+        currentEmployees.add(employeeName);
+        shops[shopIndex]['employees'] = currentEmployees;
+        notifyListeners();
+      }
+    }
+  }
+
   void addOrder(Map<String, dynamic> order) {
-    order['status'] = 'Pending';
-    orders.add(order);
-    notifyListeners();
+    if (order.isNotEmpty) {
+      order['status'] = 'Pending';
+      orders.add(order);
+      notifyListeners();
+    }
   }
 
   void forwardOrder(int id) {
-    int index = orders.indexWhere((order) => order['id'] == id);
+    final index = orders.indexWhere((order) => order['id'] == id);
     if (index != -1) {
       orders[index]['status'] = 'Forwarded';
       notifyListeners();
@@ -61,7 +97,7 @@ class AppDataProvider extends ChangeNotifier {
   }
 
   void markOrderReceived(int id) {
-    int index = orders.indexWhere((order) => order['id'] == id);
+    final index = orders.indexWhere((order) => order['id'] == id);
     if (index != -1) {
       orders[index]['status'] = 'Received';
       notifyListeners();
@@ -74,27 +110,47 @@ class AppDataProvider extends ChangeNotifier {
   }
 
   void addSale(Map<String, dynamic> saleData) {
-    sales.add(saleData);
-    notifyListeners();
+    if (saleData.isNotEmpty && saleData['amount'] != null) {
+      sales.add(saleData);
+      notifyListeners();
+    }
+  }
+
+  void addShop(Map<String, dynamic> shopData) {
+    if (shopData.isNotEmpty) {
+      shops.add(shopData);
+      notifyListeners();
+    }
   }
 
   void deleteShop(int index) {
-    shops.removeAt(index);
-    notifyListeners();
+    if (index >= 0 && index < shops.length) {
+      shops.removeAt(index);
+      notifyListeners();
+    }
   }
 
-  // 📊 Summary Getters
+  // Summary Getters
   int get totalOrders => orders.length;
-  double get totalSales =>
-      sales.fold(0, (sum, sale) => sum + (sale['amount'] ?? 0));
+
+  double get totalSales => sales.fold(
+    0,
+    (sum, sale) => sum + (sale['amount'] is num ? sale['amount'] : 0),
+  );
+
   int get totalShops => shops.length;
+
   int get totalEmployees => employees.length;
 
-  // Filtered
+  // Filtered Orders
   List<Map<String, dynamic>> get pendingOrders =>
       orders.where((o) => o['status'] == 'Pending').toList();
+
   List<Map<String, dynamic>> get forwardedOrders =>
       orders.where((o) => o['status'] == 'Forwarded').toList();
+
   List<Map<String, dynamic>> get receivedOrders =>
       orders.where((o) => o['status'] == 'Received').toList();
 }
+
+// List<Map<String, dynamic>> _shops = [];

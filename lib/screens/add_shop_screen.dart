@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../providers/app_data_provider.dart';
 
 class AddShopScreen extends StatefulWidget {
   const AddShopScreen({super.key});
@@ -10,12 +12,20 @@ class AddShopScreen extends StatefulWidget {
 class _AddShopScreenState extends State<AddShopScreen> {
   final _formKey = GlobalKey<FormState>();
   final TextEditingController _shopNameController = TextEditingController();
-
   bool isOpen = true;
 
   void _submit() {
     if (_formKey.currentState!.validate()) {
-      // In real app: Save to database
+      final appData = Provider.of<AppDataProvider>(context, listen: false);
+
+      final shopData = {
+        'name': _shopNameController.text.trim(),
+        'isOpen': isOpen,
+        'employees': [], // 👈 Add empty list to avoid type error
+      };
+
+      appData.addShop(shopData); // 🔥 Save to provider
+
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text("Shop added successfully!")));
@@ -42,15 +52,18 @@ class _AddShopScreenState extends State<AddShopScreen> {
             children: [
               TextFormField(
                 controller: _shopNameController,
-                decoration: const InputDecoration(labelText: "Shop Name"),
+                decoration: const InputDecoration(
+                  labelText: "Shop Name",
+                  border: OutlineInputBorder(),
+                ),
                 validator: (value) =>
-                    value == null || value.isEmpty ? "Required" : null,
+                    value == null || value.trim().isEmpty ? "Required" : null,
               ),
               const SizedBox(height: 20),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text("Shop Status", style: TextStyle(fontSize: 16)),
+                  const Text("Shop Open?", style: TextStyle(fontSize: 16)),
                   Switch(
                     value: isOpen,
                     activeColor: Colors.green,

@@ -11,15 +11,15 @@ import '../utils/logger.dart';
 
 import '../screens/add_sale_screen.dart';
 import '../screens/reports_screen.dart';
-import '../screens/add_employee_screen.dart';
+import '../screens/add_employee_and_access_screen.dart';
 import '../screens/add_shop_screen.dart';
-import '../screens/assign_access_screen.dart';
 import '../screens/profile_screen.dart';
 import '../screens/orders_screen.dart';
 import '../screens/add_order_screen.dart';
 import '../screens/sales_screen.dart';
 import '../screens/admin_orders_screen.dart';
 import '../screens/login_screen.dart';
+import '../screens/all_shops_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -280,18 +280,18 @@ class HomeDashboard extends StatelessWidget {
 
                 // Admin Only
                 if (role == 'admin') ...[
-                  QuickActionButton(
-                    icon: Icons.settings,
-                    label: "Settings",
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const ProfileScreen(),
-                        ),
-                      );
-                    },
-                  ),
+                  // QuickActionButton(
+                  //   icon: Icons.settings,
+                  //   label: "Settings",
+                  //   onTap: () {
+                  //     Navigator.push(
+                  //       context,
+                  //       MaterialPageRoute(
+                  //         builder: (_) => const ProfileScreen(),
+                  //       ),
+                  //     );
+                  //   },
+                  // ),
                   QuickActionButton(
                     icon: Icons.add_business,
                     label: "Add Shop",
@@ -304,30 +304,20 @@ class HomeDashboard extends StatelessWidget {
                       );
                     },
                   ),
+
                   QuickActionButton(
-                    icon: Icons.person_add,
-                    label: "Add Employee",
+                    icon: Icons.person_add_alt_1,
+                    label: "Add Employee + Access",
                     onTap: () {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => const AddEmployeeScreen(),
+                          builder: (_) => const AddEmployeeAndAccessScreen(),
                         ),
                       );
                     },
                   ),
-                  QuickActionButton(
-                    icon: Icons.vpn_key,
-                    label: "Assign Access",
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const AssignAccessScreen(),
-                        ),
-                      );
-                    },
-                  ),
+
                   QuickActionButton(
                     icon: Icons.admin_panel_settings,
                     label: "Manage Orders",
@@ -385,7 +375,12 @@ class HomeDashboard extends StatelessWidget {
                         icon: const Icon(Icons.add),
                         label: const Text("Add Your First Shop"),
                         onPressed: () {
-                          Navigator.pushNamed(context, '/add-shop');
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const AddShopScreen(),
+                            ),
+                          );
                         },
                       ),
                     ],
@@ -401,12 +396,14 @@ class HomeDashboard extends StatelessWidget {
                           final orderCount = appData.orders
                               .where((order) => order['shop'] == shop['name'])
                               .length;
+                          final employeeList = shop['employees'] as List? ?? [];
+                          final employeeCount = employeeList.length;
 
                           return ShopCard(
                             shopName: shop['name'],
-                            employees: shop['employees'],
+                            employees: employeeCount, // ✅ Fix here!
                             isOpen: shop['isOpen'],
-                            orderCount: orderCount, // ✅ This is good!
+                            orderCount: orderCount,
                             onCheckIn: () =>
                                 log.info("Checked into ${shop['name']}"),
                           );
@@ -417,7 +414,12 @@ class HomeDashboard extends StatelessWidget {
                           alignment: Alignment.centerRight,
                           child: TextButton(
                             onPressed: () {
-                              Navigator.pushNamed(context, '/all-shops');
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => const AllShopsScreen(),
+                                ),
+                              );
                             },
                             child: const Text("See All Shops →"),
                           ),

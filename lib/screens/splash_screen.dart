@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'login_screen.dart'; // Replace with actual login screen import
+import 'login_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -13,7 +13,6 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
-
     Timer(const Duration(seconds: 3), () {
       Navigator.pushReplacement(
         context,
@@ -24,34 +23,43 @@ class _SplashScreenState extends State<SplashScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return Scaffold(
-      backgroundColor: Colors.white, // App theme color
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            // 🖼 App Logo
-            Image.asset('assets/logo/shopy_logo.png', width: 120, height: 120),
-            const SizedBox(height: 20),
-            // 🅰 App Name
-            const Text(
-              "Shopy App",
-              style: TextStyle(
-                fontSize: 26,
-                fontWeight: FontWeight.bold,
-                color: Color.fromARGB(255, 113, 113, 113),
-                letterSpacing: 1.2,
+      backgroundColor: theme.scaffoldBackgroundColor,
+      body: SafeArea(
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              // Logo
+              Hero(
+                tag: 'app-logo',
+                child: Image.asset(
+                  'assets/logo/shopy_logo.png',
+                  width: 120,
+                  height: 120,
+                  errorBuilder: (_, __, ___) => const Icon(Icons.store),
+                ),
               ),
-            ),
-            const SizedBox(height: 10),
-            const Text(
-              "Retail & Shop Manager",
-              style: TextStyle(
-                color: Color.fromARGB(255, 113, 113, 113),
-                fontSize: 14,
+              const SizedBox(height: 24),
+              Text(
+                "Shopy App",
+                style: theme.textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.deepPurple,
+                  letterSpacing: 1.2,
+                ),
               ),
-            ),
-          ],
+              const SizedBox(height: 8),
+              Text(
+                "Retail & Shop Manager",
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: Colors.grey[600],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

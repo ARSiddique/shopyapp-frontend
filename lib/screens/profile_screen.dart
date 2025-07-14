@@ -1,51 +1,23 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../providers/theme_provider.dart';
+import '../providers/app_data_provider.dart';
 
-class ProfileScreen extends StatefulWidget {
+class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
 
   @override
-  State<ProfileScreen> createState() => _ProfileScreenState();
-}
-
-class _ProfileScreenState extends State<ProfileScreen> {
-  bool isDarkMode = false; // UI-only for now
-  final bool isOwner = true; // Simulated role
-  final String userName = "Ali Raza";
-  final String assignedShop = "All Shops";
-
-  void _logout() {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text("Logout"),
-        content: const Text("Are you sure you want to logout?"),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("Cancel"),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              ScaffoldMessenger.of(
-                context,
-              ).showSnackBar(const SnackBar(content: Text("Logged out")));
-            },
-            child: const Text("Logout"),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _changeCode() {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text("Change Code (coming soon)")));
-  }
-
-  @override
   Widget build(BuildContext context) {
+    final appData = Provider.of<AppDataProvider>(context);
+    final themeProvider = Provider.of<ThemeProvider>(context);
+    final isDarkMode = themeProvider.isDarkMode;
+
+    final user = appData.loggedInUser;
+    final isOwner = user?['role'] == 'owner';
+    final userName = user?['name'] ?? "Ali Raza";
+    final assignedShop =
+        (user?['assignedShops'] as List?)?.join(', ') ?? "All Shops";
+
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.surfaceVariant,
       appBar: AppBar(
@@ -59,7 +31,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: Theme.of(context).cardColor,
               borderRadius: BorderRadius.circular(12),
               boxShadow: [
                 BoxShadow(
@@ -107,7 +79,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           SwitchListTile(
             value: isDarkMode,
             onChanged: (value) {
-              setState(() => isDarkMode = value);
+              themeProvider.toggleTheme(value);
             },
             title: const Text("Dark Mode"),
             secondary: const Icon(Icons.dark_mode),
@@ -121,19 +93,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
               leading: const Icon(Icons.lock_outline),
               title: const Text("Change Login Code"),
               trailing: const Icon(Icons.chevron_right),
-              onTap: _changeCode,
+              onTap: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Change Code (coming soon)")),
+                );
+              },
             ),
 
           // 🚪 Logout
           ListTile(
             leading: const Icon(Icons.logout, color: Colors.red),
             title: const Text("Logout"),
-            onTap: _logout,
+            onTap: () {
+              appData.logout();
+              Navigator.pop(context);
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(const SnackBar(content: Text("Logged out")));
+            },
           ),
 
           const SizedBox(height: 40),
 
-          // ℹ️ App Info
           Center(
             child: Text(
               "Version 1.0.0\nBuilt with ❤️ by YourTeam",

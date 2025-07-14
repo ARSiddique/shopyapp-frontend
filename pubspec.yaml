@@ -1,5 +1,5 @@
 name: shopy_app
-description: "A new Flutter project."
+description: "A smart retail & shop management Flutter app."
 publish_to: 'none'
 
 version: 1.0.0+1
@@ -10,15 +10,20 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  logging: ^1.2.0
   cupertino_icons: ^1.0.8
-  provider: ^6.1.1  # ✅ Add this line
-
+  provider: ^6.1.1
+  logging: ^1.2.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.13.1
+
+flutter_icons:
+  android: true
+  ios: true
+  image_path: "assets/logo/shopy_logo.png"
 
 flutter:
   uses-material-design: true

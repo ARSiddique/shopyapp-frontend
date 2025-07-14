@@ -15,20 +15,18 @@ class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController codeController = TextEditingController();
 
   void handleLogin() {
-    final enteredCode = codeController.text.trim();
+    final name = nameController.text.trim().toLowerCase();
+    final code = codeController.text.trim();
 
-    final isAdmin =
-        nameController.text.trim().toLowerCase() == 'admin' &&
-        enteredCode == '1234';
+    final appData = Provider.of<AppDataProvider>(context, listen: false);
 
-    if (isAdmin) {
+    if (name == 'admin' && code == '1234') {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const HomeScreen()),
       );
     } else {
-      final appData = Provider.of<AppDataProvider>(context, listen: false);
-      final success = appData.login(enteredCode);
+      final success = appData.login(code);
       if (success) {
         Navigator.pushReplacement(
           context,
@@ -47,24 +45,37 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: theme.scaffoldBackgroundColor,
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 30),
+            padding: const EdgeInsets.symmetric(horizontal: 32),
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                // Logo
-                Image.asset('assets/logo/shopy_logo.png', height: 120),
-                const SizedBox(height: 30),
-
-                const Text(
-                  "Welcome to Shopy",
-                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                Hero(
+                  tag: 'app-logo',
+                  child: Image.asset(
+                    'assets/logo/shopy_logo.png',
+                    height: 120,
+                    errorBuilder: (_, __, ___) => const Icon(Icons.store),
+                  ),
                 ),
                 const SizedBox(height: 30),
 
+                Text(
+                  "Welcome to Shopy",
+                  style: theme.textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.deepPurple,
+                  ),
+                ),
+                const SizedBox(height: 30),
+
+                // Name Input
                 TextField(
                   controller: nameController,
                   decoration: const InputDecoration(
@@ -74,6 +85,8 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                 ),
                 const SizedBox(height: 20),
+
+                // Login Code Input
                 TextField(
                   controller: codeController,
                   decoration: const InputDecoration(
@@ -85,22 +98,21 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 30),
 
+                // Login Button
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton.icon(
-                    onPressed: handleLogin,
                     icon: const Icon(Icons.login, color: Colors.white),
                     label: const Text("Login"),
+                    onPressed: handleLogin,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.deepPurple,
-                      foregroundColor: Colors.white, // Text + icon color
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(
-                          12,
-                        ), // Rounded corners
-                      ),
+                      foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 14),
                       textStyle: const TextStyle(fontSize: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
                   ),
                 ),
