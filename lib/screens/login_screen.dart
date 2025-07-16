@@ -13,6 +13,7 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController nameController = TextEditingController();
   final TextEditingController codeController = TextEditingController();
+  bool _obscurePassword = true;
 
   void handleLogin() {
     final name = nameController.text.trim().toLowerCase();
@@ -21,6 +22,14 @@ class _LoginScreenState extends State<LoginScreen> {
     final appData = Provider.of<AppDataProvider>(context, listen: false);
 
     if (name == 'admin' && code == '1234') {
+      final adminUser = {
+        'name': 'Admin',
+        'email': 'admin@shopy.com',
+        'role': 'admin',
+      };
+
+      appData.loginUser(adminUser);
+
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const HomeScreen()),
@@ -65,7 +74,6 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                 ),
                 const SizedBox(height: 30),
-
                 Text(
                   "Welcome to Shopy",
                   style: theme.textTheme.headlineSmall?.copyWith(
@@ -75,7 +83,6 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 30),
 
-                // Name Input
                 TextField(
                   controller: nameController,
                   decoration: const InputDecoration(
@@ -86,19 +93,27 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 20),
 
-                // Login Code Input
                 TextField(
                   controller: codeController,
-                  decoration: const InputDecoration(
+                  obscureText: _obscurePassword,
+                  decoration: InputDecoration(
                     labelText: "Login Code",
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.lock),
+                    border: const OutlineInputBorder(),
+                    prefixIcon: const Icon(Icons.lock),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        _obscurePassword
+                            ? Icons.visibility_off
+                            : Icons.visibility,
+                      ),
+                      onPressed: () {
+                        setState(() => _obscurePassword = !_obscurePassword);
+                      },
+                    ),
                   ),
-                  obscureText: true,
                 ),
                 const SizedBox(height: 30),
 
-                // Login Button
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton.icon(

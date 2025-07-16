@@ -1,85 +1,43 @@
 import 'package:flutter/material.dart';
-import '../utils/delete_shop_dialog.dart';
 
 class ShopCard extends StatelessWidget {
   final String shopName;
-  final int employees;
-  final bool isOpen;
+  final int employeeCount;
   final int orderCount;
-  final VoidCallback onCheckIn;
+  final bool isOpen;
+  final VoidCallback? onTap;
+  final VoidCallback? onDelete;
+  final bool showDelete;
 
   const ShopCard({
     super.key,
     required this.shopName,
-    required this.employees,
-    required this.isOpen,
+    required this.employeeCount,
     required this.orderCount,
-    required this.onCheckIn,
+    required this.isOpen,
+    this.onTap,
+    this.onDelete,
+    this.showDelete = false,
   });
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      elevation: 3,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        child: Row(
-          children: [
-            CircleAvatar(
-              backgroundColor: isOpen ? Colors.green : Colors.grey,
-              radius: 6,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    shopName,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    "Employees: $employees",
-                    style: const TextStyle(fontSize: 13, color: Colors.grey),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    "Orders: $orderCount",
-                    style: const TextStyle(fontSize: 13, color: Colors.grey),
-                  ),
-                ],
-              ),
-            ),
-            IconButton(
-              icon: const Icon(Icons.qr_code_scanner, color: Colors.deepPurple),
-              tooltip: 'Check-In / Check-Out',
-              onPressed: onCheckIn,
-            ),
-            IconButton(
-              icon: const Icon(Icons.delete_outline, color: Colors.red),
-              tooltip: 'Delete Shop',
-              onPressed: () {
-                showDeleteShopDialog(
-                  context: context,
-                  shopName: shopName,
-                  onConfirmed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text("$shopName deleted successfully!"),
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
-          ],
-        ),
+      elevation: 4,
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      child: ListTile(
+        onTap: onTap,
+        leading: Icon(Icons.store, color: isOpen ? Colors.green : Colors.red),
+        title: Text(shopName),
+        subtitle: Text('👥 $employeeCount | 📦 $orderCount'),
+        trailing: showDelete
+            ? IconButton(
+                icon: const Icon(Icons.delete, color: Colors.red),
+                onPressed: onDelete,
+              )
+            : null,
       ),
     );
   }

@@ -10,27 +10,32 @@ class AppDataProvider extends ChangeNotifier {
   // Logged-in User
   Map<String, dynamic>? _loggedInUser;
   Map<String, dynamic>? get loggedInUser => _loggedInUser;
+
   Map<String, dynamic> getEmployeeByName(String name) {
-    return employees.firstWhere((emp) => emp['name'] == name, orElse: () => {});
+    return employees.firstWhere((e) => e['name'] == name, orElse: () => {});
   }
 
-  // Login
+  // ✅ Admin Manual Login
+  void loginUser(Map<String, dynamic> user) {
+    _loggedInUser = user;
+    notifyListeners();
+  }
+
+  // Employee Login
   bool login(String code) {
     if (code.isEmpty || employees.isEmpty) return false;
-    try {
-      final user = employees.firstWhere(
-        (e) => e['loginCode'] == code,
-        orElse: () => {},
-      );
-      if (user.isNotEmpty) {
-        _loggedInUser = user;
-        notifyListeners();
-        return true;
-      }
-      return false;
-    } catch (e) {
-      return false;
+
+    final matched = employees.firstWhere(
+      (e) => e['loginCode'] == code,
+      orElse: () => {},
+    );
+
+    if (matched.isNotEmpty) {
+      _loggedInUser = matched;
+      notifyListeners();
+      return true;
     }
+    return false;
   }
 
   void logout() {
@@ -41,8 +46,7 @@ class AppDataProvider extends ChangeNotifier {
   void addEmployee(Map<String, dynamic> employeeData) {
     if (employeeData.isNotEmpty) {
       employees.add(employeeData);
-
-      final String name = employeeData['name'];
+      final name = employeeData['name'];
       final List<String> assignedShops = List<String>.from(
         employeeData['assignedShops'] ?? [],
       );
@@ -66,12 +70,9 @@ class AppDataProvider extends ChangeNotifier {
 
   void assignAccess(String shopName, String employeeName) {
     final shopIndex = shops.indexWhere((shop) => shop['name'] == shopName);
-
     if (shopIndex != -1) {
       final shop = shops[shopIndex];
-
       final currentEmployees = List<String>.from(shop['employees'] ?? []);
-
       if (!currentEmployees.contains(employeeName)) {
         currentEmployees.add(employeeName);
         shops[shopIndex]['employees'] = currentEmployees;
@@ -80,9 +81,11 @@ class AppDataProvider extends ChangeNotifier {
     }
   }
 
-  void addOrder(Map<String, dynamic> order) {
+ void addOrder(Map<String, dynamic> order) {
     if (order.isNotEmpty) {
       order['status'] = 'Pending';
+      order['createdAt'] = DateTime.now();
+      order['canRequestEdit'] = true;
       orders.add(order);
       notifyListeners();
     }
@@ -109,8 +112,10 @@ class AppDataProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void addSale(Map<String, dynamic> saleData) {
+void addSale(Map<String, dynamic> saleData) {
     if (saleData.isNotEmpty && saleData['amount'] != null) {
+      saleData['createdAt'] = DateTime.now();
+      saleData['canRequestEdit'] = true;
       sales.add(saleData);
       notifyListeners();
     }
@@ -130,27 +135,30 @@ class AppDataProvider extends ChangeNotifier {
     }
   }
 
-  // Summary Getters
+  void deleteShopByName(String name) {
+    shops.removeWhere((shop) => shop['name'] == name);
+    notifyListeners();
+  }
+
+  void updateShop(String originalName, Map<String, dynamic> updatedData) {
+    final index = shops.indexWhere((s) => s['name'] == originalName);
+    if (index != -1) {
+      shops[index] = {...shops[index], ...updatedData};
+      notifyListeners();
+    }
+  }
+
+
+
   int get totalOrders => orders.length;
-
-  double get totalSales => sales.fold(
-    0,
-    (sum, sale) => sum + (sale['amount'] is num ? sale['amount'] : 0),
-  );
-
+  double get totalSales => sales.fold(0, (sum, s) => sum + (s['amount'] ?? 0));
   int get totalShops => shops.length;
-
   int get totalEmployees => employees.length;
 
-  // Filtered Orders
   List<Map<String, dynamic>> get pendingOrders =>
       orders.where((o) => o['status'] == 'Pending').toList();
-
   List<Map<String, dynamic>> get forwardedOrders =>
       orders.where((o) => o['status'] == 'Forwarded').toList();
-
   List<Map<String, dynamic>> get receivedOrders =>
       orders.where((o) => o['status'] == 'Received').toList();
 }
-
-// List<Map<String, dynamic>> _shops = [];

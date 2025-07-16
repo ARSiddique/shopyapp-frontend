@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
 import '../providers/app_data_provider.dart';
 import '../utils/delete_shop_dialog.dart';
 import 'shop_detail_screen.dart';
@@ -17,7 +18,11 @@ class _AllShopsScreenState extends State<AllShopsScreen> {
   @override
   Widget build(BuildContext context) {
     final appData = Provider.of<AppDataProvider>(context);
-    final shops = appData.shops.where((shop) {
+    final user = appData.loggedInUser;
+    final role = user?['role'] ?? 'employee';
+    final isAdmin = role == 'admin' || role == 'owner';
+
+    final visibleShops = appData.shops.where((shop) {
       return shop['name'].toLowerCase().contains(searchQuery.toLowerCase());
     }).toList();
 
@@ -40,15 +45,16 @@ class _AllShopsScreenState extends State<AllShopsScreen> {
             ),
             const SizedBox(height: 20),
             Expanded(
-              child: shops.isEmpty
+              child: visibleShops.isEmpty
                   ? const Center(child: Text("No shops found."))
                   : ListView.builder(
-                      itemCount: shops.length,
+                      itemCount: visibleShops.length,
                       itemBuilder: (_, index) {
-                        final shop = shops[index];
-                        final employeeList = shop['employees'] ?? [];
+                        final shop = visibleShops[index];
+                        final shopName = shop['name'];
+                        final employeeNames = shop['employees'] ?? [];
                         final orderCount = appData.orders
-                            .where((o) => o['shop'] == shop['name'])
+                            .where((o) => o['shop'] == shopName)
                             .length;
 
                         return Card(
@@ -56,66 +62,50 @@ class _AllShopsScreenState extends State<AllShopsScreen> {
                           margin: const EdgeInsets.only(bottom: 12),
                           child: ExpansionTile(
                             leading: const Icon(Icons.store),
-                            title: Text(shop['name']),
+                            title: Text(shopName),
                             subtitle: Text("Orders: $orderCount"),
                             children: [
                               ListTile(
                                 title: Text(
                                   "Status: ${shop['isOpen'] ? 'Open' : 'Closed'}",
                                 ),
-                                trailing: ElevatedButton.icon(
-                                  icon: const Icon(Icons.edit),
-                                  label: const Text("Edit Shop"),
-                                  onPressed: () {
-                                    // TODO: Implement Edit Shop logic
-                                  },
-                                ),
                               ),
-
-                              // 👥 Employees List
-                              if (employeeList.isEmpty)
+                              if (employeeNames.isEmpty)
                                 const ListTile(
                                   title: Text("No employees assigned"),
                                 )
                               else
-                                ...employeeList.map<Widget>((empName) {
-                                  final employee = appData.getEmployeeByName(
+                                ...employeeNames.map<Widget>((empName) {
+                                  final emp = appData.getEmployeeByName(
                                     empName,
                                   );
-                                  return ExpansionTile(
-                                    title: Text(empName),
-                                    children: [
-                                      ListTile(
-                                        title: Text(
-                                          "Email: ${employee['email'] ?? '-'}",
-                                        ),
-                                        subtitle: Text(
-                                          "Phone: ${employee['phone'] ?? '-'}",
-                                        ),
-                                      ),
-                                    ],
-                                  );
-                                }),
+                                  if (emp.isEmpty) return const SizedBox();
 
-                              // 🗑 Delete Button
-                              ListTile(
-                                leading: const Icon(
-                                  Icons.delete,
-                                  color: Colors.red,
-                                ),
-                                title: const Text("Delete Shop"),
-                                onTap: () {
-                                  showDeleteShopDialog(
-                                    context: context,
-                                    shopName: shop['name'],
-                                    onConfirmed: () {
-                                      appData.deleteShop(index);
-                                    },
-                                  );
-                                },
-                              ),
+                                  final shops = emp['assignedShops'] ?? [];
 
-                              // ℹ️ View Details Button
+                                  return ListTile(
+                                    title: Text(emp['name'] ?? '-'),
+                                    subtitle: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text("Email: ${emp['email'] ?? '-'}"),
+                                        Text("Phone: ${emp['phone'] ?? '-'}"),
+                                        Text("Role: ${emp['role'] ?? '-'}"),
+                                        Text(
+                                          "Login Code: ${emp['loginCode'] ?? '-'}",
+                                        ),
+                                        Text(
+                                          "Assigned Shops: ${shops.isEmpty ? '-' : shops.join(', ')}",
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                }).toList(),
+
+                              const Divider(),
+
+                              // View Details Button
                               ListTile(
                                 leading: const Icon(Icons.info_outline),
                                 title: const Text("View Full Details"),
@@ -123,14 +113,31 @@ class _AllShopsScreenState extends State<AllShopsScreen> {
                                   Navigator.push(
                                     context,
                                     MaterialPageRoute(
-                                      builder: (_) => ShopDetailScreen(
-                                        shopName: shop['name'],
-                                        isOpen: shop['isOpen'],
-                                      ),
+                                      builder: (_) =>
+                                          ShopDetailScreen(shopName: shopName),
                                     ),
                                   );
                                 },
                               ),
+
+                              // Delete Shop Button
+                              if (isAdmin)
+                                ListTile(
+                                  leading: const Icon(
+                                    Icons.delete,
+                                    color: Colors.red,
+                                  ),
+                                  title: const Text("Delete Shop"),
+                                  onTap: () {
+                                    showDeleteShopDialog(
+                                      context: context,
+                                      shopName: shopName,
+                                      onConfirmed: () {
+                                        appData.deleteShopByName(shopName);
+                                      },
+                                    );
+                                  },
+                                ),
                             ],
                           ),
                         );

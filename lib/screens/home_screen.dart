@@ -2,13 +2,10 @@ import 'dart:io' show Platform;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-
 import '../providers/app_data_provider.dart';
 import '../widgets/summary_card.dart';
 import '../widgets/quick_action_button.dart';
 import '../widgets/shop_card.dart';
-import '../utils/logger.dart';
-
 import '../screens/add_sale_screen.dart';
 import '../screens/reports_screen.dart';
 import '../screens/add_employee_and_access_screen.dart';
@@ -20,6 +17,7 @@ import '../screens/sales_screen.dart';
 import '../screens/admin_orders_screen.dart';
 import '../screens/login_screen.dart';
 import '../screens/all_shops_screen.dart';
+import '../screens/shop_detail_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -93,19 +91,19 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final appData = Provider.of<AppDataProvider>(context);
-    final user = appData.loggedInUser;
-    final role = user?['role'] ?? 'admin';
+    final user = appData.loggedInUser ?? {};
+    final name = user['name'] ?? 'User';
+   final role = (user['role'] ?? 'employee').toString().toLowerCase();
 
-    // Create tab list based on role
-    final List<Widget> pages = [
+ final List<Widget> pages = [
       const HomeDashboard(),
       if (role == 'admin' || role == 'manager' || role == 'employee')
         const OrdersScreen(),
       if (role == 'admin' || role == 'manager') const SalesScreen(),
-      if (role == 'admin') const ProfileScreen(),
+      const ProfileScreen(), // ✅ Now available to all roles
     ];
 
-    final List<BottomNavigationBarItem> navItems = [
+final List<BottomNavigationBarItem> navItems = [
       const BottomNavigationBarItem(icon: Icon(Icons.dashboard), label: "Home"),
       if (role == 'admin' || role == 'manager' || role == 'employee')
         const BottomNavigationBarItem(
@@ -117,23 +115,29 @@ class _HomeScreenState extends State<HomeScreen> {
           icon: Icon(Icons.attach_money),
           label: "Sales",
         ),
-      if (role == 'admin')
-        const BottomNavigationBarItem(
-          icon: Icon(Icons.person),
-          label: "Profile",
-        ),
+      const BottomNavigationBarItem(
+        // ✅ Shown to all roles
+        icon: Icon(Icons.person),
+        label: "Profile",
+      ),
     ];
+
+    if (navItems.length < 2) {
+      return const Scaffold(
+        body: Center(child: Text("Invalid role or insufficient menu items.")),
+      );
+    }
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          "Shopy App",
-          style: TextStyle(color: Colors.white), // White title text
-        ),
         backgroundColor: Colors.deepPurple,
+        title: Text(
+          "$name (${role[0].toUpperCase()}${role.substring(1)})",
+          style: const TextStyle(color: Colors.white),
+        ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.logout, color: Colors.red), // 🔴 Red icon
+            icon: const Icon(Icons.logout, color: Colors.red),
             tooltip: "Logout",
             onPressed: () => showPlatformLogoutDialog(context),
           ),
@@ -157,21 +161,26 @@ class HomeDashboard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final appData = Provider.of<AppDataProvider>(context);
-    final user = appData.loggedInUser;
-    final role = user?['role'] ?? 'admin';
+    final user = appData.loggedInUser ?? {};
+    final role = user['role']?.toLowerCase() ?? 'employee';
+    // 👤 Get employee assigned shops
+    final assignedShops = List<String>.from(user['assignedShops'] ?? []);
+    final myShops = appData.shops
+        .where((shop) => assignedShops.contains(shop['name']))
+        .toList();
 
     List<Map<String, dynamic>> shops = [];
 
     if (role == 'admin') {
       shops = appData.shops;
     } else {
-      final assigned = user?['assignedShops'] as List<String>? ?? [];
+      final assigned = user['assignedShops'] as List<String>? ?? [];
       shops = appData.shops
           .where((shop) => assigned.contains(shop['name']))
           .toList();
     }
 
-    return SafeArea(
+   return SafeArea(
       child: SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
         child: Column(
@@ -182,9 +191,8 @@ class HomeDashboard extends StatelessWidget {
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
-
-            // 📊 Summary Cards
-            GridView.count(
+            
+             GridView.count(
               crossAxisCount: 2,
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
@@ -225,8 +233,6 @@ class HomeDashboard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 24),
-
-            // ⚡ Quick Actions
             const Text(
               "Quick Actions",
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
@@ -235,9 +241,7 @@ class HomeDashboard extends StatelessWidget {
             Wrap(
               spacing: 20,
               runSpacing: 20,
-              alignment: WrapAlignment.spaceAround,
               children: [
-                // Common to All Roles
                 QuickActionButton(
                   icon: Icons.add_shopping_cart,
                   label: "Add Order",
@@ -248,8 +252,6 @@ class HomeDashboard extends StatelessWidget {
                     );
                   },
                 ),
-
-                // Manager + Admin
                 if (role == 'admin' || role == 'manager')
                   QuickActionButton(
                     icon: Icons.attach_money,
@@ -263,7 +265,6 @@ class HomeDashboard extends StatelessWidget {
                       );
                     },
                   ),
-
                 if (role == 'admin' || role == 'manager')
                   QuickActionButton(
                     icon: Icons.bar_chart,
@@ -277,21 +278,7 @@ class HomeDashboard extends StatelessWidget {
                       );
                     },
                   ),
-
-                // Admin Only
-                if (role == 'admin') ...[
-                  // QuickActionButton(
-                  //   icon: Icons.settings,
-                  //   label: "Settings",
-                  //   onTap: () {
-                  //     Navigator.push(
-                  //       context,
-                  //       MaterialPageRoute(
-                  //         builder: (_) => const ProfileScreen(),
-                  //       ),
-                  //     );
-                  //   },
-                  // ),
+                if (role == 'admin')
                   QuickActionButton(
                     icon: Icons.add_business,
                     label: "Add Shop",
@@ -304,7 +291,7 @@ class HomeDashboard extends StatelessWidget {
                       );
                     },
                   ),
-
+                if (role == 'admin')
                   QuickActionButton(
                     icon: Icons.person_add_alt_1,
                     label: "Add Employee + Access",
@@ -317,7 +304,7 @@ class HomeDashboard extends StatelessWidget {
                       );
                     },
                   ),
-
+                if (role == 'admin' || role == 'manager')
                   QuickActionButton(
                     icon: Icons.admin_panel_settings,
                     label: "Manage Orders",
@@ -329,14 +316,11 @@ class HomeDashboard extends StatelessWidget {
                         ),
                       );
                     },
-                  ),
-                ],
-
-                // Employee (or All)
-                if (role == 'admin' || role == 'employee')
+                  )
+                else
                   QuickActionButton(
-                    icon: Icons.receipt,
-                    label: "View Orders",
+                    icon: Icons.receipt_long,
+                    label: "My Orders",
                     onTap: () {
                       Navigator.push(
                         context,
@@ -348,15 +332,12 @@ class HomeDashboard extends StatelessWidget {
                   ),
               ],
             ),
-
             const SizedBox(height: 32),
-
             const Text(
               "Shops Overview",
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
-
             shops.isEmpty
                 ? Column(
                     children: [
@@ -368,7 +349,7 @@ class HomeDashboard extends StatelessWidget {
                       const SizedBox(height: 12),
                       const Text(
                         "No shops added yet.",
-                        style: TextStyle(fontSize: 16, color: Colors.grey),
+                        style: TextStyle(color: Colors.grey),
                       ),
                       const SizedBox(height: 10),
                       ElevatedButton.icon(
@@ -396,16 +377,21 @@ class HomeDashboard extends StatelessWidget {
                           final orderCount = appData.orders
                               .where((order) => order['shop'] == shop['name'])
                               .length;
-                          final employeeList = shop['employees'] as List? ?? [];
-                          final employeeCount = employeeList.length;
 
                           return ShopCard(
                             shopName: shop['name'],
-                            employees: employeeCount, // ✅ Fix here!
+                            employeeCount: shop['employees']?.length ?? 0,
                             isOpen: shop['isOpen'],
                             orderCount: orderCount,
-                            onCheckIn: () =>
-                                log.info("Checked into ${shop['name']}"),
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) =>
+                                      ShopDetailScreen(shopName: shop['name']),
+                                ),
+                              );
+                            },
                           );
                         },
                       ),
