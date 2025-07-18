@@ -175,39 +175,39 @@ class _AdminOrdersScreenState extends State<AdminOrdersScreen> {
   }
 
 
-  void _showEditRequestDialog(BuildContext context, int orderId) {
-    final reasonController = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text("Request Edit"),
-        content: TextField(
-          controller: reasonController,
-          decoration: const InputDecoration(labelText: "Reason for edit"),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("Cancel"),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              final reason = reasonController.text.trim();
-              if (reason.isNotEmpty) {
-                Provider.of<AppDataProvider>(
-                  context,
-                  listen: false,
-                ).requestOrderEdit(orderId, reason);
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text("Edit request sent to manager")),
-                );
-              }
-            },
-            child: const Text("Submit"),
-          ),
-        ],
-      ),
-    );
-  }
+  // void _showEditRequestDialog(BuildContext context, int orderId) {
+  //   final reasonController = TextEditingController();
+  //   showDialog(
+  //     context: context,
+  //     builder: (_) => AlertDialog(
+  //       title: const Text("Request Edit"),
+  //       content: TextField(
+  //         controller: reasonController,
+  //         decoration: const InputDecoration(labelText: "Reason for edit"),
+  //       ),
+  //       actions: [
+  //         TextButton(
+  //           onPressed: () => Navigator.pop(context),
+  //           child: const Text("Cancel"),
+  //         ),
+  //         ElevatedButton(
+  //           onPressed: () {
+  //             final reason = reasonController.text.trim();
+  //             if (reason.isNotEmpty) {
+  //               Provider.of<AppDataProvider>(
+  //                 context,
+  //                 listen: false,
+  //               ).requestOrderEdit(orderId, reason);
+  //               Navigator.pop(context);
+  //               ScaffoldMessenger.of(context).showSnackBar(
+  //                 const SnackBar(content: Text("Edit request sent to manager")),
+  //               );
+  //             }
+  //           },
+  //           child: const Text("Submit"),
+  //         ),
+  //       ],
+  //     ),
+  //   );
+  // }
 }

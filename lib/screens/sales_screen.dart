@@ -32,7 +32,6 @@ class _SalesScreenState extends State<SalesScreen> {
   @override
   Widget build(BuildContext context) {
     final appData = Provider.of<AppDataProvider>(context, listen: false);
-    ;
     final user = appData.loggedInUser ?? {};
     final role = (user['role'] ?? '').toString().toLowerCase();
     final employeeName = user['name'] as String? ?? '';

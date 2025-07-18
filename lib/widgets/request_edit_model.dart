@@ -8,13 +8,14 @@ class RequestEditModal extends StatefulWidget {
   final String requestedBy;
 
   const RequestEditModal({
+    super.key,
     required this.type,
     required this.itemId,
     required this.requestedBy,
   });
 
   @override
-  _RequestEditModalState createState() => _RequestEditModalState();
+  State<RequestEditModal> createState() => _RequestEditModalState();
 }
 
 class _RequestEditModalState extends State<RequestEditModal> {

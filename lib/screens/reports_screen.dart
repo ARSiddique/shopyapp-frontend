@@ -121,7 +121,7 @@ class _ReportCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Card(
-      color: color.withOpacity(0.1),
+      color: color.withAlpha((0.1 * 255).round()),
       child: Container(
         width: 90,
         padding: const EdgeInsets.symmetric(vertical: 16),

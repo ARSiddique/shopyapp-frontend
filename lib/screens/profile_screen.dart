@@ -61,7 +61,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         : assignedList.join(', ');
 
     return Scaffold(
-      backgroundColor: Theme.of(context).colorScheme.surfaceVariant,
+      backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
       appBar: AppBar(
         title: const Text("Profile & Settings"),
         backgroundColor: Colors.deepPurple,
