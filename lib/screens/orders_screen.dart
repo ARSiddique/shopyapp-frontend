@@ -1,215 +1,192 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_data_provider.dart';
+import '../widgets/edit_order_model.dart';
 
-class OrdersScreen extends StatelessWidget {
+class OrdersScreen extends StatefulWidget {
   const OrdersScreen({super.key});
 
   @override
+  State<OrdersScreen> createState() => _OrdersScreenState();
+}
+
+class _OrdersScreenState extends State<OrdersScreen> {
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    // Rebuild every second to update countdown timers
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final orders = Provider.of<AppDataProvider>(context).orders;
+    final appData = Provider.of<AppDataProvider>(context);
+    final user = appData.loggedInUser ?? {};
+    final role = user['role'] ?? '';
+    final employeeName = user['name'] ?? '';
+    final assignedShops = List<String>.from(user['assignedShops'] ?? []);
+
+    // Role‑based filtering:
+    final List<Map<String, dynamic>> myOrders = role == 'employee'
+        ? appData.orders.where((o) => o['employee'] == employeeName).toList()
+        : role == 'manager'
+        ? appData.orders
+              .where((o) => assignedShops.contains(o['shop']))
+              .toList()
+        : appData.orders;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Orders"),
+        title: Text(
+          role == 'employee'
+              ? 'My Orders'
+              : role == 'manager'
+              ? 'Assigned Orders'
+              : 'All Orders',
+        ),
         backgroundColor: Colors.deepPurple,
       ),
-      body: orders.isEmpty
-          ? const Center(child: Text("No orders yet."))
+      body: myOrders.isEmpty
+          ? const Center(child: Text("No orders available"))
           : ListView.separated(
               padding: const EdgeInsets.all(16),
-              itemCount: orders.length,
+              itemCount: myOrders.length,
               separatorBuilder: (_, __) => const SizedBox(height: 12),
               itemBuilder: (context, index) {
-                final order = orders[index];
+                final order = myOrders[index];
+                final createdAt = order['createdAt'] as DateTime;
+                final elapsed = DateTime.now().difference(createdAt);
+                final canEdit = elapsed.inMinutes < 10;
+                final secondsLeft = 600 - elapsed.inSeconds;
 
-                return Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(10),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Colors.black12,
-                        blurRadius: 4,
-                        offset: Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Top Row: Order ID and Date
-                      Row(
-                        children: [
-                          const Icon(Icons.receipt, color: Colors.deepPurple),
-                          const SizedBox(width: 8),
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 16),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text("🧾 Order ID: ${order['id']}"),
+                        Text("🏪 Shop: ${order['shop']}"),
+                        Text("👤 Employee: ${order['employee']}"),
+                        Text("💵 Amount: Rs. ${order['amount']}"),
+                        const SizedBox(height: 8),
+                        if (order['employee'] == employeeName)
                           Text(
-                            "Order ID: ${order['id']}",
-                            style: const TextStyle(
+                            canEdit
+                                ? "⏱ Edit Time Left: ${formatCountdown(secondsLeft)}"
+                                : "❌ Edit time expired",
+                            style: TextStyle(
+                              color: canEdit ? Colors.orange : Colors.red,
                               fontWeight: FontWeight.bold,
-                              fontSize: 16,
                             ),
                           ),
-                          const Spacer(),
-                          Text(
-                            order['date'],
-                            style: const TextStyle(
-                              color: Colors.grey,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
-                      ),
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 8,
+                          children: [
+                            // Edit button (within 10m)
+                            if (order['employee'] == employeeName && canEdit)
+                              ElevatedButton.icon(
+                                onPressed: () {
+                                  showDialog(
+                                    context: context,
+                                    builder: (_) =>
+                                        EditOrderModal(orderData: order),
+                                  );
+                                },
+                                icon: const Icon(Icons.edit),
+                                label: const Text("Edit"),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.orange,
+                                ),
+                              ),
 
-                      const SizedBox(height: 10),
+                            // Request Edit (after 10m)
+                            if (order['employee'] == employeeName && !canEdit)
+                              ElevatedButton.icon(
+                                onPressed: () {
+                                  appData.addEditRequest(
+                                    type: 'order',
+                                    itemId: order['id'],
+                                    reason: 'Employee requested edit',
+                                    requestedBy: employeeName,
+                                  );
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('Edit request sent'),
+                                    ),
+                                  );
+                                },
+                                icon: const Icon(Icons.request_page),
+                                label: const Text("Request Edit"),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.blueGrey,
+                                ),
+                              ),
 
-                      // Shop + Payment
-                      Row(
-                        children: [
-                          Text("Shop: ${order['shop']}"),
-                          const Spacer(),
-                          Chip(
-                            label: Text(order['paymentType']),
-                            backgroundColor: order['paymentType'] == "Cash"
-                                ? Colors.green.shade100
-                                : Colors.blue.shade100,
-                          ),
-                        ],
-                      ),
-
-                      const SizedBox(height: 8),
-
-                      // Amount and View
-                      Row(
-                        children: [
-                          const Icon(
-                            Icons.attach_money,
-                            color: Colors.grey,
-                            size: 20,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            "Amount: Rs. ${order['amount']}",
-                            style: const TextStyle(fontWeight: FontWeight.w500),
-                          ),
-                          const Spacer(),
-                          TextButton(
-                            onPressed: () {
-                              _showOrderDetails(context, order);
-                            },
-                            child: const Text("View Details"),
-                          ),
-                        ],
-                      ),
-
-                      const SizedBox(height: 8),
-
-                      // Status Chip + Actions
-                      Row(
-                        children: [
-                          Chip(
-                            label: Text(order['status']),
-                            backgroundColor: _statusColor(order['status']),
-                            labelStyle: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                            ),
-                          ),
-                          const Spacer(),
-                          if (order['status'] == 'Pending')
-                            TextButton(
+                            // Delete (everyone can delete their own; admin deletes any)
+                            ElevatedButton.icon(
                               onPressed: () {
-                                Provider.of<AppDataProvider>(
-                                  context,
-                                  listen: false,
-                                ).forwardOrder(order['id']);
+                                appData.deleteOrder(order['id'].toString());
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text("Order deleted"),
+                                  ),
+                                );
                               },
-                              child: const Text("Forward"),
+                              icon: const Icon(Icons.delete),
+                              label: const Text("Delete"),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.red,
+                              ),
                             ),
-                          if (order['status'] == 'Forwarded')
-                            TextButton(
-                              onPressed: () {
-                                Provider.of<AppDataProvider>(
-                                  context,
-                                  listen: false,
-                                ).markOrderReceived(order['id']);
-                              },
-                              child: const Text("Mark Received"),
-                            ),
-                          IconButton(
-                            icon: const Icon(Icons.delete, color: Colors.red),
-                            onPressed: () {
-                              _showDeleteDialog(context, order['id']);
-                            },
-                          ),
-                        ],
-                      ),
-                    ],
+
+                            // Mark as Received (manager & admin)
+                            if ((role == 'manager' || role == 'admin') &&
+                                order['status'] != 'Received')
+                              ElevatedButton.icon(
+                                onPressed: () {
+                                  appData.markOrderReceived(
+                                    order['id'].toString(),
+                                  );
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text("Order marked as received"),
+                                    ),
+                                  );
+                                },
+                                icon: const Icon(Icons.check_circle),
+                                label: const Text("Mark Received"),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.green,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
                 );
               },
             ),
     );
   }
+}
 
-  Color _statusColor(String status) {
-    switch (status) {
-      case 'Pending':
-        return Colors.orange;
-      case 'Forwarded':
-        return Colors.blue;
-      case 'Received':
-        return Colors.green;
-      default:
-        return Colors.grey;
-    }
-  }
-
-  void _showDeleteDialog(BuildContext context, int id) {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text("Delete Order?"),
-        content: const Text("Are you sure you want to delete this order?"),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("Cancel"),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Provider.of<AppDataProvider>(
-                context,
-                listen: false,
-              ).deleteOrder(id);
-              Navigator.pop(context);
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text("Delete"),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showOrderDetails(BuildContext context, Map<String, dynamic> order) {
-    showModalBottomSheet(
-      context: context,
-      builder: (_) => Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Wrap(
-          children: [
-            ListTile(title: Text("🛒 Item: ${order['items']}")),
-            ListTile(title: Text("📍 Shop: ${order['shop']}")),
-            ListTile(title: Text("👤 Employee: ${order['employee']}")),
-            ListTile(title: Text("💳 Payment: ${order['paymentType']}")),
-            ListTile(title: Text("📝 Notes: ${order['notes']}")),
-            ListTile(title: Text("📅 Date: ${order['date']}")),
-            ListTile(title: Text("📦 Status: ${order['status']}")),
-          ],
-        ),
-      ),
-    );
-  }
+String formatCountdown(int totalSeconds) {
+  final minutes = (totalSeconds ~/ 60).toString().padLeft(2, '0');
+  final seconds = (totalSeconds % 60).toString().padLeft(2, '0');
+  return "$minutes:$seconds";
 }

@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_data_provider.dart';
+import '../widgets/edit_sale_modal.dart';
 
 class AddSaleScreen extends StatefulWidget {
   const AddSaleScreen({super.key});
@@ -10,118 +12,110 @@ class AddSaleScreen extends StatefulWidget {
 }
 
 class _AddSaleScreenState extends State<AddSaleScreen> {
-  double cash = 0;
-  double card = 0;
-  double venmo = 0;
-  bool submitted = false;
+  final TextEditingController amountController = TextEditingController();
+  Timer? _countdownTimer;
+  Duration? _remainingTime;
+  Map<String, dynamic>? _lastSale;
+
+  @override
+  void initState() {
+    super.initState();
+    _initCountdown();
+  }
+
+  void _initCountdown() {
+    final appData = Provider.of<AppDataProvider>(context, listen: false);
+    final user = appData.loggedInUser;
+    if (user == null) return;
+
+    final employeeName = user['name'];
+    final sales = appData.allSales
+        .where((s) => s['employee'] == employeeName)
+        .toList();
+
+    if (sales.isNotEmpty) {
+      final recentSale = sales.last;
+      final createdAt = recentSale['createdAt'] as DateTime;
+      final elapsed = DateTime.now().difference(createdAt);
+
+      if (elapsed.inMinutes < 5) {
+        setState(() {
+          _lastSale = recentSale;
+          _remainingTime = Duration(minutes: 5) - elapsed;
+        });
+        _startTimer();
+      }
+    }
+  }
+
+  void _startTimer() {
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_remainingTime != null && _remainingTime!.inSeconds > 0) {
+        setState(() {
+          _remainingTime = _remainingTime! - const Duration(seconds: 1);
+        });
+      } else {
+        _countdownTimer?.cancel();
+        setState(() {
+          _remainingTime = null;
+          _lastSale = null;
+        });
+      }
+    });
+  }
 
   void _submitSale() {
     final appData = Provider.of<AppDataProvider>(context, listen: false);
-    final user = appData.loggedInUser;
+    final amount = double.tryParse(amountController.text.trim());
 
-    final sale = {
-      'amount': cash + card + venmo,
-      'cash': cash,
-      'card': card,
-      'venmo': venmo,
-      'submittedBy': user?['name'] ?? 'Unknown',
-      'timestamp': DateTime.now().toString(),
-    };
+    if (amount != null && amount > 0) {
+      final sale = {
+        'id': DateTime.now().millisecondsSinceEpoch,
+        'amount': amount,
+        'employee': appData.loggedInUser?['name'],
+        'shop': appData.loggedInUser?['assignedShops']?[0] ?? '',
+        'createdAt': DateTime.now(),
+      };
+      appData.addSale(sale);
+      amountController.clear();
 
-    appData.addSale(sale);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Sale added successfully')));
 
-    setState(() {
-      submitted = true;
-    });
-
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text("Sale submitted.")));
+      _initCountdown();
+    }
   }
 
-  Widget _saleInputTile(
-    String label,
-    double value,
-    Function(double) onChanged,
-  ) {
-    return ListTile(
-      title: Text(label),
-      subtitle: Text("Rs. ${value.toStringAsFixed(0)}"),
-      trailing: !submitted
-          ? IconButton(
-              icon: const Icon(Icons.edit),
-              onPressed: () async {
-                final result = await _showInputBottomSheet(label);
-                if (result != null) onChanged(result);
-              },
-            )
-          : const Icon(Icons.lock, color: Colors.grey),
-    );
-  }
+  void _editLastSale() {
+    if (_lastSale == null) return;
 
-  Future<double?> _showInputBottomSheet(String label) async {
-    String input = '';
-    return await showModalBottomSheet<double>(
+    showDialog(
       context: context,
-      builder: (_) {
-        return StatefulBuilder(
-          builder: (context, setState) {
-            return Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text("Enter $label", style: const TextStyle(fontSize: 18)),
-                  const SizedBox(height: 10),
-                  Text(input, style: const TextStyle(fontSize: 32)),
-                  const SizedBox(height: 20),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children:
-                        List.generate(10, (index) {
-                          return ElevatedButton(
-                            onPressed: () =>
-                                setState(() => input += index.toString()),
-                            child: Text('$index'),
-                          );
-                        }) +
-                        [
-                          ElevatedButton(
-                            onPressed: () {
-                              setState(
-                                () => input = input.isNotEmpty
-                                    ? input.substring(0, input.length - 1)
-                                    : '',
-                              );
-                            },
-                            child: const Icon(Icons.backspace),
-                          ),
-                          ElevatedButton(
-                            onPressed: () {
-                              Navigator.pop(
-                                context,
-                                double.tryParse(input) ?? 0,
-                              );
-                            },
-                            child: const Text("OK"),
-                          ),
-                        ],
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
+      builder: (_) => EditSaleModal(
+        initialAmount: _lastSale!['amount'],
+        onSubmit: (updatedAmount) {
+          final appData = Provider.of<AppDataProvider>(context, listen: false);
+          appData.updateSaleAmount(_lastSale!['id'], updatedAmount);
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Sale updated successfully')),
+          );
+
+          Navigator.pop(context);
+        },
+      ),
     );
   }
 
   @override
-  Widget build(BuildContext context) {
-    final appData = Provider.of<AppDataProvider>(context);
-    final userRole = appData.loggedInUser?['role'];
+  void dispose() {
+    _countdownTimer?.cancel();
+    super.dispose();
+  }
 
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text("Add Sale"),
@@ -131,38 +125,46 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            _saleInputTile("Cash", cash, (val) => setState(() => cash = val)),
-            _saleInputTile("Card", card, (val) => setState(() => card = val)),
-            _saleInputTile(
-              "Venmo",
-              venmo,
-              (val) => setState(() => venmo = val),
+            TextField(
+              controller: amountController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: "Sale Amount",
+                prefixIcon: Icon(Icons.attach_money),
+                border: OutlineInputBorder(),
+              ),
             ),
             const SizedBox(height: 20),
-            if (!submitted)
-              ElevatedButton.icon(
-                onPressed: _submitSale,
-                icon: const Icon(Icons.check),
-                label: const Text("Submit Sale"),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green,
-                  minimumSize: const Size.fromHeight(50),
+            ElevatedButton.icon(
+              onPressed: _submitSale,
+              icon: const Icon(Icons.save),
+              label: const Text("Submit Sale"),
+            ),
+            if (_remainingTime != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 20),
+                child: Column(
+                  children: [
+                    Text(
+                      "⏱ Edit Available: ${_remainingTime!.inMinutes.remainder(60).toString().padLeft(2, '0')}:${_remainingTime!.inSeconds.remainder(60).toString().padLeft(2, '0')}",
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.redAccent,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    ElevatedButton.icon(
+                      onPressed: _editLastSale,
+                      icon: const Icon(Icons.edit),
+                      label: const Text("Edit Last Sale"),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orange,
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            if (submitted) const Text("Sale Submitted ✅"),
-
-            const Divider(height: 40),
-
-            // 🚫 Hide totals from employee
-            if (userRole != 'employee') ...[
-              Text(
-                "Total: Rs. ${(cash + card + venmo).toStringAsFixed(0)}",
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                ),
-              ),
-            ],
           ],
         ),
       ),

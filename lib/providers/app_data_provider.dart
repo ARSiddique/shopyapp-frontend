@@ -1,32 +1,28 @@
 import 'package:flutter/material.dart';
 
 class AppDataProvider extends ChangeNotifier {
-  // Data Stores
-  List<Map<String, dynamic>> orders = [];
-  List<Map<String, dynamic>> sales = [];
+  
+  Map<String, dynamic>? _loggedInUser;
+  final List<Map<String, dynamic>> _orders = [];
+  final List<Map<String, dynamic>> _sales = [];
+  final List<Map<String, dynamic>> _editRequests = [];
   List<Map<String, dynamic>> shops = [];
   List<Map<String, dynamic>> employees = [];
-
-  // Logged-in User
-  Map<String, dynamic>? _loggedInUser;
+  List<Map<String, dynamic>> get orders => _orders;
   Map<String, dynamic>? get loggedInUser => _loggedInUser;
 
-  Map<String, dynamic> getEmployeeByName(String name) {
-    return employees.firstWhere((e) => e['name'] == name, orElse: () => {});
-  }
-
-  // ✅ Admin Manual Login
   void loginUser(Map<String, dynamic> user) {
     _loggedInUser = user;
     notifyListeners();
   }
 
-  // Employee Login
-  bool login(String code) {
-    if (code.isEmpty || employees.isEmpty) return false;
+  bool loginWithNameAndCode(String name, String code) {
+    if (name.isEmpty || code.isEmpty || employees.isEmpty) return false;
 
     final matched = employees.firstWhere(
-      (e) => e['loginCode'] == code,
+      (e) =>
+          e['name'].toString().toLowerCase() == name.toLowerCase() &&
+          e['loginCode'] == code,
       orElse: () => {},
     );
 
@@ -36,6 +32,23 @@ class AppDataProvider extends ChangeNotifier {
       return true;
     }
     return false;
+  }
+
+  List<Map<String, dynamic>> get editRequests => _editRequests;
+  void addEditRequest({
+    required String type, // 'sale' or 'order'
+    required int itemId,
+    required String reason,
+    required String requestedBy,
+  }) {
+    _editRequests.add({
+      'type': type,
+      'itemId': itemId,
+      'reason': reason,
+      'requestedBy': requestedBy,
+      'timestamp': DateTime.now(),
+    });
+    notifyListeners();
   }
 
   void logout() {
@@ -63,7 +76,36 @@ class AppDataProvider extends ChangeNotifier {
           }
         }
       }
+      notifyListeners();
+    }
+  }
 
+  void requestOrderEdit(int orderId, String reason) {
+    _editRequests.add({
+      'type': 'order',
+      'itemId': orderId,
+      'reason': reason,
+      'requestedBy': _loggedInUser?['name'],
+      'timestamp': DateTime.now(),
+    });
+    notifyListeners();
+  }
+
+  void requestSaleEdit(int saleId, String reason) {
+    _editRequests.add({
+      'type': 'sale',
+      'itemId': saleId,
+      'reason': reason,
+      'requestedBy': _loggedInUser?['name'],
+      'timestamp': DateTime.now(),
+    });
+    notifyListeners();
+  }
+
+  void updateSaleAmount(int saleId, double newAmount) {
+    final index = _sales.indexWhere((s) => s['id'] == saleId);
+    if (index != -1) {
+      _sales[index]['amount'] = newAmount;
       notifyListeners();
     }
   }
@@ -71,53 +113,14 @@ class AppDataProvider extends ChangeNotifier {
   void assignAccess(String shopName, String employeeName) {
     final shopIndex = shops.indexWhere((shop) => shop['name'] == shopName);
     if (shopIndex != -1) {
-      final shop = shops[shopIndex];
-      final currentEmployees = List<String>.from(shop['employees'] ?? []);
+      final currentEmployees = List<String>.from(
+        shops[shopIndex]['employees'] ?? [],
+      );
       if (!currentEmployees.contains(employeeName)) {
         currentEmployees.add(employeeName);
         shops[shopIndex]['employees'] = currentEmployees;
         notifyListeners();
       }
-    }
-  }
-
- void addOrder(Map<String, dynamic> order) {
-    if (order.isNotEmpty) {
-      order['status'] = 'Pending';
-      order['createdAt'] = DateTime.now();
-      order['canRequestEdit'] = true;
-      orders.add(order);
-      notifyListeners();
-    }
-  }
-
-  void forwardOrder(int id) {
-    final index = orders.indexWhere((order) => order['id'] == id);
-    if (index != -1) {
-      orders[index]['status'] = 'Forwarded';
-      notifyListeners();
-    }
-  }
-
-  void markOrderReceived(int id) {
-    final index = orders.indexWhere((order) => order['id'] == id);
-    if (index != -1) {
-      orders[index]['status'] = 'Received';
-      notifyListeners();
-    }
-  }
-
-  void deleteOrder(int id) {
-    orders.removeWhere((order) => order['id'] == id);
-    notifyListeners();
-  }
-
-void addSale(Map<String, dynamic> saleData) {
-    if (saleData.isNotEmpty && saleData['amount'] != null) {
-      saleData['createdAt'] = DateTime.now();
-      saleData['canRequestEdit'] = true;
-      sales.add(saleData);
-      notifyListeners();
     }
   }
 
@@ -128,12 +131,15 @@ void addSale(Map<String, dynamic> saleData) {
     }
   }
 
-  void deleteShop(int index) {
-    if (index >= 0 && index < shops.length) {
-      shops.removeAt(index);
-      notifyListeners();
-    }
-  }
+  // void requestOrderEdit(String orderId) {
+  //     final orderIndex = _orders.indexWhere(
+  //       (order) => order['id'].toString() == orderId.toString(),
+  //     );
+  //     if (orderIndex != -1) {
+  //       _orders[orderIndex]['editRequested'] = true;
+  //       notifyListeners();
+  //     }
+  //   }
 
   void deleteShopByName(String name) {
     shops.removeWhere((shop) => shop['name'] == name);
@@ -148,17 +154,144 @@ void addSale(Map<String, dynamic> saleData) {
     }
   }
 
+  Map<String, dynamic> getEmployeeByName(String name) {
+    return employees.firstWhere((e) => e['name'] == name, orElse: () => {});
+  }
+
+  // ---------------------------
+  // Orders
+  // ---------------------------
+  // List<Map<String, dynamic>> get orders => [..._orders];
+
+  void addOrder(Map<String, dynamic> order) {
+    if (order.isNotEmpty) {
+      order['status'] = 'Pending';
+      order['createdAt'] = DateTime.now();
+      order['canRequestEdit'] = true;
+      _orders.add(order);
+      notifyListeners();
+    }
+  }
+
+  void forwardOrder(int id) {
+    final index = _orders.indexWhere((order) => order['id'] == id);
+    if (index != -1) {
+      _orders[index]['status'] = 'Forwarded';
+      notifyListeners();
+    }
+  }
+
+  void markOrderReceived(String id) {
+    final index = _orders.indexWhere((o) => o['id'] == id);
+    if (index != -1) {
+      _orders[index]['status'] = 'Received';
+      notifyListeners();
+    }
+  }
+
+  void deleteOrder(String id) {
+    _orders.removeWhere((o) => o['id'] == id);
+    notifyListeners();
+  }
+
+  void editOrder(Map<String, dynamic> updatedOrder) {
+    final index = _orders.indexWhere((o) => o['id'] == updatedOrder['id']);
+    if (index != -1) {
+      _orders[index] = updatedOrder;
+      notifyListeners();
+    }
+  }
+
+  bool canEditOrder(Map<String, dynamic> order) {
+    final createdAt = order['createdAt'] as DateTime?;
+    if (createdAt == null) return false;
+
+    final diff = DateTime.now().difference(createdAt);
+    return diff.inMinutes <= 10;
+  }
+
+  List<Map<String, dynamic>> getEmployeeOrders(String employeeName) {
+    return _orders
+        .where((order) => order['createdBy'] == employeeName)
+        .toList();
+  }
+
+  // ---------------------------
+  // Sales
+  // ---------------------------
+  List<Map<String, dynamic>> get allSales => [..._sales];
+
+  List<Map<String, dynamic>> get sales {
+    final now = DateTime.now();
+    return _sales.where((s) {
+      final createdAt = s['createdAt'] as DateTime?;
+      final isRecent =
+          createdAt != null && now.difference(createdAt).inMinutes < 5;
+      final isOwner = s['addedBy'] == _loggedInUser?['name'];
+      return isOwner && isRecent;
+    }).toList();
+  }
+
+ void addSale(Map<String, dynamic> saleData) {
+    if (saleData.isNotEmpty && saleData['amount'] != null) {
+      saleData['createdAt'] = DateTime.now();
+      saleData['canRequestEdit'] = true;
+      saleData['addedBy'] = _loggedInUser?['name'];
+      _sales.add(saleData);
+      notifyListeners();
+    }
+  }
+
+void updateProfile({String? email, String? phone, String? password}) {
+    if (_loggedInUser != null) {
+      if (email != null) _loggedInUser!['email'] = email;
+      if (phone != null) _loggedInUser!['phone'] = phone;
+      if (password != null) _loggedInUser!['password'] = password;
+      notifyListeners();
+    }
+  }
 
 
-  int get totalOrders => orders.length;
-  double get totalSales => sales.fold(0, (sum, s) => sum + (s['amount'] ?? 0));
+  void editSale(Map<String, dynamic> updatedSale) {
+    final index = _sales.indexWhere((s) => s['id'] == updatedSale['id']);
+    if (index != -1) {
+      _sales[index] = updatedSale;
+      notifyListeners();
+    }
+  }
+
+  void deleteSale(String id) {
+    _sales.removeWhere((s) => s['id'] == id);
+    notifyListeners();
+  }
+
+  List<Map<String, dynamic>> getEmployeeSales(String employeeName) {
+    final now = DateTime.now();
+    return _sales.where((sale) {
+      final createdAt = sale['createdAt'] as DateTime?;
+      final createdBy = sale['addedBy'];
+      if (createdAt == null || createdBy != employeeName) return false;
+
+      final diff = now.difference(createdAt);
+      return diff.inMinutes <= 5;
+    }).toList();
+  }
+
+  // ---------------------------
+  // Dashboard Counters
+  // ---------------------------
+  int get totalOrders => _orders.length;
+  double get totalSales =>
+      _sales.fold(0.0, (sum, s) => sum + (s['amount'] ?? 0.0));
   int get totalShops => shops.length;
   int get totalEmployees => employees.length;
 
   List<Map<String, dynamic>> get pendingOrders =>
-      orders.where((o) => o['status'] == 'Pending').toList();
+      _orders.where((o) => o['status'] == 'Pending').toList();
+
   List<Map<String, dynamic>> get forwardedOrders =>
-      orders.where((o) => o['status'] == 'Forwarded').toList();
+      _orders.where((o) => o['status'] == 'Forwarded').toList();
+
   List<Map<String, dynamic>> get receivedOrders =>
-      orders.where((o) => o['status'] == 'Received').toList();
+      _orders.where((o) => o['status'] == 'Received').toList();
 }

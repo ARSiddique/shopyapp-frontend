@@ -11,42 +11,54 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
-  late TextEditingController emailController;
-  late TextEditingController phoneOrPasswordController;
+  late TextEditingController _emailController;
+  late TextEditingController _phoneController;
+  late TextEditingController _passwordController;
+  bool _obscurePassword = true;
 
   @override
   void initState() {
+    super.initState();
     final user =
         Provider.of<AppDataProvider>(context, listen: false).loggedInUser ?? {};
-    emailController = TextEditingController(text: user['email'] ?? '');
-    phoneOrPasswordController = TextEditingController(
-      text: user['role'] == 'employee'
-          ? user['loginCode'] ?? ''
-          : user['phone'] ?? '',
-    );
-    super.initState();
+    _emailController = TextEditingController(text: user['email'] ?? '');
+    _phoneController = TextEditingController(text: user['phone'] ?? '');
+    _passwordController = TextEditingController(text: user['password'] ?? '');
   }
 
   @override
   void dispose() {
-    emailController.dispose();
-    phoneOrPasswordController.dispose();
+    _emailController.dispose();
+    _phoneController.dispose();
+    _passwordController.dispose();
     super.dispose();
+  }
+
+  void _saveProfile() {
+    final appData = Provider.of<AppDataProvider>(context, listen: false);
+    appData.updateProfile(
+      email: _emailController.text.trim(),
+      phone: _phoneController.text.trim(),
+      password: _passwordController.text,
+    );
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Profile updated successfully")),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final appData = Provider.of<AppDataProvider>(context);
     final themeProvider = Provider.of<ThemeProvider>(context);
-    final user = appData.loggedInUser ?? {};
-    final role = user['role'] ?? 'employee';
     final isDarkMode = themeProvider.isDarkMode;
-
-    final name = user['name'] ?? 'Unknown';
-    final assignedShops =
-        (user['assignedShops'] as List?)?.join(', ') ?? 'None';
-
-    final isEmployee = role == 'employee';
+    final user = appData.loggedInUser ?? {};
+    final userName = user['name'] ?? "Unknown";
+    final userRole = (user['role'] ?? "employee").toString();
+    final rawAssigned = user['assignedShops'] ?? <dynamic>[];
+    final assignedList = List<String>.from(rawAssigned);
+    final assignedShops = assignedList.isEmpty
+        ? "None"
+        : assignedList.join(', ');
 
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.surfaceVariant,
@@ -63,11 +75,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
             decoration: BoxDecoration(
               color: Theme.of(context).cardColor,
               borderRadius: BorderRadius.circular(12),
-              boxShadow: [
+              boxShadow: const [
                 BoxShadow(
                   color: Colors.black12,
                   blurRadius: 6,
-                  offset: const Offset(0, 3),
+                  offset: Offset(0, 3),
                 ),
               ],
             ),
@@ -83,14 +95,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      name,
+                      userName,
                       style: const TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
                     Text(
-                      role.toUpperCase(),
+                      userRole.toUpperCase(),
                       style: const TextStyle(color: Colors.grey),
                     ),
                     Text(
@@ -107,38 +119,58 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
           // Editable Email
           TextField(
-            controller: emailController,
-            decoration: const InputDecoration(labelText: "Email"),
+            controller: _emailController,
+            decoration: const InputDecoration(
+              labelText: "Email",
+              border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.email),
+            ),
             keyboardType: TextInputType.emailAddress,
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 16),
 
-          // Editable Phone or Password based on role
+          // Editable Phone
           TextField(
-            controller: phoneOrPasswordController,
-            decoration: InputDecoration(
-              labelText: isEmployee ? "Login Password" : "Phone",
+            controller: _phoneController,
+            decoration: const InputDecoration(
+              labelText: "Phone",
+              border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.phone),
             ),
-            keyboardType: isEmployee ? TextInputType.text : TextInputType.phone,
+            keyboardType: TextInputType.phone,
           ),
+          const SizedBox(height: 16),
 
-          const SizedBox(height: 10),
-          ElevatedButton.icon(
-            onPressed: () {
-              user['email'] = emailController.text;
-              if (isEmployee) {
-                user['loginCode'] = phoneOrPasswordController.text;
-              } else {
-                user['phone'] = phoneOrPasswordController.text;
-              }
-              appData.notifyListeners();
-              ScaffoldMessenger.of(
-                context,
-              ).showSnackBar(const SnackBar(content: Text("Profile updated")));
-            },
-            icon: const Icon(Icons.save),
-            label: const Text("Save Changes"),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.deepPurple),
+          // Editable Password
+          TextField(
+            controller: _passwordController,
+            obscureText: _obscurePassword,
+            decoration: InputDecoration(
+              labelText: "Password",
+              border: const OutlineInputBorder(),
+              prefixIcon: const Icon(Icons.lock),
+              suffixIcon: IconButton(
+                icon: Icon(
+                  _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                ),
+                onPressed: () =>
+                    setState(() => _obscurePassword = !_obscurePassword),
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // Save button
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              icon: const Icon(Icons.save),
+              label: const Text("Save Changes"),
+              onPressed: _saveProfile,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.deepPurple,
+              ),
+            ),
           ),
 
           const Divider(height: 40),
@@ -146,29 +178,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
           // Dark Mode Toggle
           SwitchListTile(
             value: isDarkMode,
-            onChanged: (value) {
-              themeProvider.toggleTheme(value);
-            },
+            onChanged: themeProvider.toggleTheme,
             title: const Text("Dark Mode"),
             secondary: const Icon(Icons.dark_mode),
           ),
 
           const Divider(),
-
-          // Optional: Admin/Owner feature
-          if (role == 'admin' || role == 'owner')
-            ListTile(
-              leading: const Icon(Icons.lock_outline),
-              title: const Text("Change Login Code"),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text("Change Code feature coming soon"),
-                  ),
-                );
-              },
-            ),
 
           // Logout
           ListTile(

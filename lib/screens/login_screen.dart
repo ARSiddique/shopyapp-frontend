@@ -35,7 +35,7 @@ class _LoginScreenState extends State<LoginScreen> {
         MaterialPageRoute(builder: (_) => const HomeScreen()),
       );
     } else {
-      final success = appData.login(code);
+      final success = appData.loginWithNameAndCode(name, code);
       if (success) {
         Navigator.pushReplacement(
           context,
@@ -44,7 +44,7 @@ class _LoginScreenState extends State<LoginScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text("Invalid login code"),
+            content: Text("Invalid Name or Code"),
             backgroundColor: Colors.red,
           ),
         );

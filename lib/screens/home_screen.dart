@@ -93,9 +93,9 @@ class _HomeScreenState extends State<HomeScreen> {
     final appData = Provider.of<AppDataProvider>(context);
     final user = appData.loggedInUser ?? {};
     final name = user['name'] ?? 'User';
-   final role = (user['role'] ?? 'employee').toString().toLowerCase();
+    final role = (user['role'] ?? 'employee').toString().toLowerCase();
 
- final List<Widget> pages = [
+    final List<Widget> pages = [
       const HomeDashboard(),
       if (role == 'admin' || role == 'manager' || role == 'employee')
         const OrdersScreen(),
@@ -103,7 +103,7 @@ class _HomeScreenState extends State<HomeScreen> {
       const ProfileScreen(), // ✅ Now available to all roles
     ];
 
-final List<BottomNavigationBarItem> navItems = [
+    final List<BottomNavigationBarItem> navItems = [
       const BottomNavigationBarItem(icon: Icon(Icons.dashboard), label: "Home"),
       if (role == 'admin' || role == 'manager' || role == 'employee')
         const BottomNavigationBarItem(
@@ -163,24 +163,20 @@ class HomeDashboard extends StatelessWidget {
     final appData = Provider.of<AppDataProvider>(context);
     final user = appData.loggedInUser ?? {};
     final role = user['role']?.toLowerCase() ?? 'employee';
+    debugPrint("👤 Logged in user: $user");
+
     // 👤 Get employee assigned shops
-    final assignedShops = List<String>.from(user['assignedShops'] ?? []);
-    final myShops = appData.shops
-        .where((shop) => assignedShops.contains(shop['name']))
-        .toList();
+    final rawAssigned = user['assignedShops'] ?? <dynamic>[];
+    final assignedShops = List<String>.from(rawAssigned);
 
-    List<Map<String, dynamic>> shops = [];
+    final List<Map<String, dynamic>> shops =
+        (role == 'admin' || role == 'manager')
+        ? appData.shops
+        : appData.shops
+              .where((shop) => assignedShops.contains(shop['name']))
+              .toList();
 
-    if (role == 'admin') {
-      shops = appData.shops;
-    } else {
-      final assigned = user['assignedShops'] as List<String>? ?? [];
-      shops = appData.shops
-          .where((shop) => assigned.contains(shop['name']))
-          .toList();
-    }
-
-   return SafeArea(
+    return SafeArea(
       child: SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
         child: Column(
@@ -191,8 +187,8 @@ class HomeDashboard extends StatelessWidget {
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
-            
-             GridView.count(
+
+            GridView.count(
               crossAxisCount: 2,
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
@@ -206,30 +202,33 @@ class HomeDashboard extends StatelessWidget {
                   value: appData.totalOrders.toString(),
                   color: Colors.deepPurple,
                 ),
-                SummaryCard(
-                  icon: Icons.trending_up,
-                  title: 'Total Sales',
-                  value: 'Rs. ${appData.totalSales.toStringAsFixed(0)}',
-                  color: Colors.teal,
-                ),
-                SummaryCard(
-                  icon: Icons.money,
-                  title: 'Expenses',
-                  value: 'Rs. 0',
-                  color: Colors.green,
-                ),
+                if (role != 'employee')
+                  SummaryCard(
+                    icon: Icons.trending_up,
+                    title: 'Total Sales',
+                    value: 'Rs. ${appData.totalSales.toStringAsFixed(0)}',
+                    color: Colors.teal,
+                  ),
+                if (role != 'employee')
+                  SummaryCard(
+                    icon: Icons.money,
+                    title: 'Expenses',
+                    value: 'Rs. 0',
+                    color: Colors.green,
+                  ),
                 SummaryCard(
                   icon: Icons.store,
                   title: 'Shops',
                   value: appData.totalShops.toString(),
                   color: Colors.orange,
                 ),
-                SummaryCard(
-                  icon: Icons.people,
-                  title: 'Employees',
-                  value: appData.totalEmployees.toString(),
-                  color: Colors.blue,
-                ),
+                if (role == 'admin' || role == 'manager')
+                  SummaryCard(
+                    icon: Icons.people,
+                    title: 'Employees',
+                    value: appData.totalEmployees.toString(),
+                    color: Colors.blue,
+                  ),
               ],
             ),
             const SizedBox(height: 24),
@@ -252,19 +251,16 @@ class HomeDashboard extends StatelessWidget {
                     );
                   },
                 ),
-                if (role == 'admin' || role == 'manager')
-                  QuickActionButton(
-                    icon: Icons.attach_money,
-                    label: "Add Sale",
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const AddSaleScreen(),
-                        ),
-                      );
-                    },
-                  ),
+                QuickActionButton(
+                  icon: Icons.attach_money,
+                  label: "Add Sale",
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const AddSaleScreen()),
+                    );
+                  },
+                ),
                 if (role == 'admin' || role == 'manager')
                   QuickActionButton(
                     icon: Icons.bar_chart,
