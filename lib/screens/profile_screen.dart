@@ -14,7 +14,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   late TextEditingController _emailController;
   late TextEditingController _phoneController;
   late TextEditingController _passwordController;
-  bool _obscurePassword = true;
+  bool _obscurePassword = false; // show password by default
 
   @override
   void initState() {
@@ -53,23 +53,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final isDarkMode = themeProvider.isDarkMode;
     final user = appData.loggedInUser ?? {};
     final userName = user['name'] ?? "Unknown";
-    final userRole = (user['role'] ?? "employee").toString();
+    final userRole = (user['role'] ?? "employee").toString().toLowerCase();
+
+    // dynamic text color
+    final textColor = isDarkMode ? Colors.white : Colors.black87;
+
+    // safe cast for assignedShops
     final rawAssigned = user['assignedShops'] ?? <dynamic>[];
     final assignedList = List<String>.from(rawAssigned);
-    final assignedShops = assignedList.isEmpty
-        ? "None"
-        : assignedList.join(', ');
+    final assignedShops = assignedList.join(', ');
 
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
       appBar: AppBar(
-        title: const Text("Profile & Settings"),
         backgroundColor: Colors.deepPurple,
+        title: Text(
+          "Profile & Settings",
+          style: TextStyle(color: Colors.white),
+        ),
       ),
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          // Profile Header
+          // ——— Header ———
           Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
@@ -91,25 +97,47 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   child: Icon(Icons.person, size: 40, color: Colors.white),
                 ),
                 const SizedBox(width: 16),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      userName,
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        userName,
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: textColor,
+                        ),
                       ),
-                    ),
-                    Text(
-                      userRole.toUpperCase(),
-                      style: const TextStyle(color: Colors.grey),
-                    ),
-                    Text(
-                      "Assigned: $assignedShops",
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                  ],
+
+                      // ROLE
+                      Text(
+                        userRole.toUpperCase(),
+                        style: TextStyle(
+                          color: textColor.withAlpha((0.7 * 255).round()),
+                        ),
+                      ),
+
+                      // EMAIL & PHONE (if provided)
+                      if ((user['email'] ?? '').isNotEmpty)
+                        Text(
+                          "Email: ${user['email']}",
+                          style: TextStyle(color: textColor),
+                        ),
+                      if ((user['phone'] ?? '').isNotEmpty)
+                        Text(
+                          "Phone: ${user['phone']}",
+                          style: TextStyle(color: textColor),
+                        ),
+
+                      // ASSIGNED shops only for employees
+                      if (userRole == 'employee')
+                        Text(
+                          "Assigned: ${assignedShops.isEmpty ? 'None' : assignedShops}",
+                          style: TextStyle(fontSize: 12, color: textColor),
+                        ),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -117,93 +145,82 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
           const SizedBox(height: 30),
 
-          // Editable Email
+          // ——— Editable Fields ———
           TextField(
             controller: _emailController,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: "Email",
-              border: OutlineInputBorder(),
-              prefixIcon: Icon(Icons.email),
+              border: const OutlineInputBorder(),
+              prefixIcon: Icon(Icons.email, color: textColor),
             ),
+            style: TextStyle(color: textColor),
             keyboardType: TextInputType.emailAddress,
           ),
+
           const SizedBox(height: 16),
 
-          // Editable Phone
           TextField(
             controller: _phoneController,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: "Phone",
-              border: OutlineInputBorder(),
-              prefixIcon: Icon(Icons.phone),
+              border: const OutlineInputBorder(),
+              prefixIcon: Icon(Icons.phone, color: textColor),
             ),
+            style: TextStyle(color: textColor),
             keyboardType: TextInputType.phone,
           ),
+
           const SizedBox(height: 16),
 
-          // Editable Password
           TextField(
             controller: _passwordController,
             obscureText: _obscurePassword,
             decoration: InputDecoration(
               labelText: "Password",
               border: const OutlineInputBorder(),
-              prefixIcon: const Icon(Icons.lock),
+              prefixIcon: Icon(Icons.lock, color: textColor),
               suffixIcon: IconButton(
                 icon: Icon(
                   _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                  color: textColor,
                 ),
                 onPressed: () =>
                     setState(() => _obscurePassword = !_obscurePassword),
               ),
             ),
+            style: TextStyle(color: textColor),
           ),
+
           const SizedBox(height: 24),
 
-          // Save button
+          // ——— Save Button ———
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
-              icon: const Icon(Icons.save),
-              label: const Text("Save Changes"),
+              icon: const Icon(Icons.save, color: Colors.white),
+              label: const Text(
+                "Save Changes",
+                style: TextStyle(color: Colors.white),
+              ),
               onPressed: _saveProfile,
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.deepPurple,
+                // foregroundColor: Colors.white, 
               ),
             ),
           ),
 
-          const Divider(height: 40),
-
-          // Dark Mode Toggle
-          SwitchListTile(
-            value: isDarkMode,
-            onChanged: themeProvider.toggleTheme,
-            title: const Text("Dark Mode"),
-            secondary: const Icon(Icons.dark_mode),
-          ),
-
-          const Divider(),
-
-          // Logout
-          ListTile(
-            leading: const Icon(Icons.logout, color: Colors.red),
-            title: const Text("Logout"),
-            onTap: () {
-              appData.logout();
-              Navigator.pop(context);
-              ScaffoldMessenger.of(
-                context,
-              ).showSnackBar(const SnackBar(content: Text("Logged out")));
-            },
-          ),
-
           const SizedBox(height: 40),
+
+          // ——— Version ———
           Center(
             child: Text(
-              "Version 1.0.0\nBuilt with ❤️ by YourTeam",
+              "Version 1.0.0\nBuilt by ARS",
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+              style: TextStyle(
+                color: textColor.withAlpha((0.6 * 255).round()),
+                fontSize: 12,
+              ),
             ),
           ),
         ],
