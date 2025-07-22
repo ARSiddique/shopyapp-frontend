@@ -10,8 +10,9 @@ import '../screens/add_sale_screen.dart';
 import '../screens/reports_screen.dart';
 import '../screens/add_shop_screen.dart';
 import '../screens/add_employee_and_access_screen.dart';
-import '../screens/admin_orders_screen.dart';
+// import '../screens/admin_orders_screen.dart';
 import '../screens/all_shops_screen.dart';
+import '../screens/orders_screen.dart';
 
 class HomeDashboard extends StatefulWidget {
   const HomeDashboard({super.key});
@@ -189,9 +190,7 @@ class _HomeDashboardState extends State<HomeDashboard> {
                     onTap: () {
                       Navigator.push(
                         context,
-                        MaterialPageRoute(
-                          builder: (_) => const AdminOrdersScreen(),
-                        ),
+                        MaterialPageRoute(builder: (_) => const OrdersScreen()),
                       );
                     },
                   ),

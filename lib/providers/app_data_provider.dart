@@ -231,7 +231,7 @@ class AppDataProvider extends ChangeNotifier {
       return isOwner && isRecent;
     }).toList();
   }
-
+  
  void addSale(Map<String, dynamic> saleData) {
     if (saleData.isNotEmpty && saleData['amount'] != null) {
       saleData['createdAt'] = DateTime.now();
@@ -241,6 +241,48 @@ class AppDataProvider extends ChangeNotifier {
       notifyListeners();
     }
   }
+
+/// Returns only the sale‑type edit requests
+  List<Map<String, dynamic>> get salesEditRequests =>
+      _editRequests.where((r) => r['type'] == 'sale').toList();
+
+  /// Approve a sale‑edit request:
+  /// 1. Applies the `newAmount` to the sale.
+  /// 2. Removes the request.
+  /// 3. Notifies listeners.
+  void approveSaleEdit(int requestId) {
+    // Locate the request
+    final reqIndex = _editRequests.indexWhere(
+      (r) => r['type'] == 'sale' && r['itemId'] == requestId,
+    );
+    if (reqIndex == -1) return;
+
+    final req = _editRequests[reqIndex];
+    final itemId = req['itemId'] as int;
+    final newAmount = req['newAmount'] as double;
+
+    // Update the sale’s amount
+    final saleIndex = _sales.indexWhere((s) => s['id'] == itemId);
+    if (saleIndex != -1) {
+      _sales[saleIndex]['amount'] = newAmount;
+    }
+
+    // Remove the request and refresh
+    _editRequests.removeAt(reqIndex);
+    notifyListeners();
+  }
+
+  /// Reject a sale‑edit request (just removes it)
+  void rejectSaleEdit(int requestId) {
+    _editRequests.removeWhere(
+      (r) => r['type'] == 'sale' && r['itemId'] == requestId,
+    );
+    notifyListeners();
+  }
+
+
+
+
 
 void updateProfile({String? email, String? phone, String? password}) {
     if (_loggedInUser != null) {

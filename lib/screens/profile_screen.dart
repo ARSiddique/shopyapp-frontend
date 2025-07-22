@@ -1,7 +1,69 @@
+import 'dart:io' show Platform;
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/theme_provider.dart';
 import '../providers/app_data_provider.dart';
+import '../screens/login_screen.dart';
+
+/// Shows a confirmation dialog before logging out.
+void showPlatformLogoutDialog(BuildContext context) {
+  final appData = Provider.of<AppDataProvider>(context, listen: false);
+  if (Platform.isIOS) {
+    showCupertinoDialog(
+      context: context,
+      builder: (_) => CupertinoAlertDialog(
+        title: const Text('Logout?'),
+        content: const Text('Are you sure you want to logout?'),
+        actions: [
+          CupertinoDialogAction(
+            child: const Text('Cancel'),
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+          CupertinoDialogAction(
+            isDestructiveAction: true,
+            child: const Text('Logout'),
+            onPressed: () {
+              Navigator.of(context).pop();
+              appData.logout();
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
+                (_) => false,
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  } else {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Logout'),
+        content: const Text('Are you sure you want to logout?'),
+        actions: [
+          TextButton(
+            child: const Text('Cancel'),
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+          TextButton(
+            child: const Text('Logout'),
+            onPressed: () {
+              Navigator.of(context).pop();
+              appData.logout();
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
+                (_) => false,
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -14,7 +76,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   late TextEditingController _emailController;
   late TextEditingController _phoneController;
   late TextEditingController _passwordController;
-  bool _obscurePassword = false; // show password by default
+  bool _obscurePassword = true;
 
   @override
   void initState() {
@@ -39,10 +101,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     appData.updateProfile(
       email: _emailController.text.trim(),
       phone: _phoneController.text.trim(),
-      password: _passwordController.text,
+      password: _passwordController.text.trim(),
     );
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Profile updated successfully")),
+      const SnackBar(content: Text('Profile updated successfully')),
     );
   }
 
@@ -52,30 +114,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final themeProvider = Provider.of<ThemeProvider>(context);
     final isDarkMode = themeProvider.isDarkMode;
     final user = appData.loggedInUser ?? {};
-    final userName = user['name'] ?? "Unknown";
-    final userRole = (user['role'] ?? "employee").toString().toLowerCase();
-
-    // dynamic text color
+    final userName = user['name'] ?? 'Unknown';
+    final userRole = (user['role'] ?? 'employee').toString().toLowerCase();
     final textColor = isDarkMode ? Colors.white : Colors.black87;
-
-    // safe cast for assignedShops
-    final rawAssigned = user['assignedShops'] ?? <dynamic>[];
-    final assignedList = List<String>.from(rawAssigned);
-    final assignedShops = assignedList.join(', ');
 
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
       appBar: AppBar(
         backgroundColor: Colors.deepPurple,
-        title: Text(
-          "Profile & Settings",
+        title: const Text(
+          'Profile & Settings',
           style: TextStyle(color: Colors.white),
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout, color: Colors.red),
+            onPressed: () => showPlatformLogoutDialog(context),
+          ),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          // ——— Header ———
+          // Header Card
           Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
@@ -109,32 +170,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           color: textColor,
                         ),
                       ),
-
-                      // ROLE
                       Text(
                         userRole.toUpperCase(),
-                        style: TextStyle(
-                          color: textColor.withAlpha((0.7 * 255).round()),
-                        ),
+                        style: TextStyle(color: textColor.withAlpha(180)),
                       ),
-
-                      // EMAIL & PHONE (if provided)
-                      if ((user['email'] ?? '').isNotEmpty)
+                      if (user['email'] != null && user['email'].isNotEmpty)
                         Text(
-                          "Email: ${user['email']}",
+                          'Email: ${user['email']}',
                           style: TextStyle(color: textColor),
                         ),
-                      if ((user['phone'] ?? '').isNotEmpty)
+                      if (user['phone'] != null && user['phone'].isNotEmpty)
                         Text(
-                          "Phone: ${user['phone']}",
+                          'Phone: ${user['phone']}',
                           style: TextStyle(color: textColor),
-                        ),
-
-                      // ASSIGNED shops only for employees
-                      if (userRole == 'employee')
-                        Text(
-                          "Assigned: ${assignedShops.isEmpty ? 'None' : assignedShops}",
-                          style: TextStyle(fontSize: 12, color: textColor),
                         ),
                     ],
                   ),
@@ -142,43 +190,37 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ],
             ),
           ),
-
           const SizedBox(height: 30),
-
-          // ——— Editable Fields ———
+          // Editable Fields
           TextField(
             controller: _emailController,
             decoration: InputDecoration(
-              labelText: "Email",
-              border: const OutlineInputBorder(),
+              labelText: 'Email',
               prefixIcon: Icon(Icons.email, color: textColor),
+              border: const OutlineInputBorder(),
             ),
             style: TextStyle(color: textColor),
             keyboardType: TextInputType.emailAddress,
           ),
-
           const SizedBox(height: 16),
-
           TextField(
             controller: _phoneController,
             decoration: InputDecoration(
-              labelText: "Phone",
-              border: const OutlineInputBorder(),
+              labelText: 'Phone',
               prefixIcon: Icon(Icons.phone, color: textColor),
+              border: const OutlineInputBorder(),
             ),
             style: TextStyle(color: textColor),
             keyboardType: TextInputType.phone,
           ),
-
           const SizedBox(height: 16),
-
           TextField(
             controller: _passwordController,
             obscureText: _obscurePassword,
             decoration: InputDecoration(
-              labelText: "Password",
-              border: const OutlineInputBorder(),
+              labelText: 'Password',
               prefixIcon: Icon(Icons.lock, color: textColor),
+              border: const OutlineInputBorder(),
               suffixIcon: IconButton(
                 icon: Icon(
                   _obscurePassword ? Icons.visibility_off : Icons.visibility,
@@ -190,37 +232,36 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
             style: TextStyle(color: textColor),
           ),
-
           const SizedBox(height: 24),
-
-          // ——— Save Button ———
+          // Dark Mode Toggle
+          SwitchListTile(
+            title: const Text('Dark Mode'),
+            value: isDarkMode,
+            onChanged: (val) => themeProvider.toggleTheme(val),
+          ),
+          const SizedBox(height: 16),
+          // Save Button
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
               icon: const Icon(Icons.save, color: Colors.white),
               label: const Text(
-                "Save Changes",
+                'Save Changes',
                 style: TextStyle(color: Colors.white),
               ),
               onPressed: _saveProfile,
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.deepPurple,
-                // foregroundColor: Colors.white, 
               ),
             ),
           ),
-
           const SizedBox(height: 40),
-
-          // ——— Version ———
+          // Version Info
           Center(
             child: Text(
-              "Version 1.0.0\nBuilt by ARS",
+              'Version 1.0.0\nBuilt by ARS',
               textAlign: TextAlign.center,
-              style: TextStyle(
-                color: textColor.withAlpha((0.6 * 255).round()),
-                fontSize: 12,
-              ),
+              style: TextStyle(color: textColor.withAlpha(150), fontSize: 12),
             ),
           ),
         ],

@@ -1,9 +1,72 @@
 import 'dart:async';
+import 'dart:io' show Platform;
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_data_provider.dart';
 import '../widgets/edit_sale_modal.dart';
+import '../screens/login_screen.dart';
 
+/// Shows a confirmation dialog before logging out.
+void showPlatformLogoutDialog(BuildContext context) {
+  final appData = Provider.of<AppDataProvider>(context, listen: false);
+  if (Platform.isIOS) {
+    showCupertinoDialog(
+      context: context,
+      builder: (_) => CupertinoAlertDialog(
+        title: const Text('Logout?'),
+        content: const Text('Are you sure you want to logout?'),
+        actions: [
+          CupertinoDialogAction(
+            child: const Text('Cancel'),
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+          CupertinoDialogAction(
+            isDestructiveAction: true,
+            child: const Text('Logout'),
+            onPressed: () {
+              Navigator.of(context).pop();
+              appData.logout();
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
+                (_) => false,
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  } else {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Logout'),
+        content: const Text('Are you sure you want to logout?'),
+        actions: [
+          TextButton(
+            child: const Text('Cancel'),
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+          TextButton(
+            child: const Text('Logout'),
+            onPressed: () {
+              Navigator.of(context).pop();
+              appData.logout();
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
+                (_) => false,
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Screen to add a new sale and optionally edit the most recent one.
 class AddSaleScreen extends StatefulWidget {
   const AddSaleScreen({super.key});
 
@@ -30,7 +93,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
 
     final employeeName = user['name'];
     final sales = appData.allSales
-        .where((s) => s['employee'] == employeeName)
+        .where((s) => s['addedBy'] == employeeName)
         .toList();
 
     if (sales.isNotEmpty) {
@@ -41,7 +104,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
       if (elapsed.inMinutes < 5) {
         setState(() {
           _lastSale = recentSale;
-          _remainingTime = Duration(minutes: 5) - elapsed;
+          _remainingTime = const Duration(minutes: 5) - elapsed;
         });
         _startTimer();
       }
@@ -66,25 +129,31 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
 
   void _submitSale() {
     final appData = Provider.of<AppDataProvider>(context, listen: false);
-    final amount = double.tryParse(amountController.text.trim());
+    final text = amountController.text.trim();
+    final amount = double.tryParse(text);
 
-    if (amount != null && amount > 0) {
-      final sale = {
-        'id': DateTime.now().millisecondsSinceEpoch,
-        'amount': amount,
-        'employee': appData.loggedInUser?['name'],
-        'shop': appData.loggedInUser?['assignedShops']?[0] ?? '',
-        'createdAt': DateTime.now(),
-      };
-      appData.addSale(sale);
-      amountController.clear();
-
+    if (amount == null || amount <= 0) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Sale added successfully')));
-
-      _initCountdown();
+      ).showSnackBar(const SnackBar(content: Text('Enter a valid amount')));
+      return;
     }
+
+    final sale = {
+      'id': DateTime.now().millisecondsSinceEpoch,
+      'amount': amount,
+      'addedBy': appData.loggedInUser?['name'],
+      'shop': appData.loggedInUser?['assignedShops']?[0] ?? '',
+      'createdAt': DateTime.now(),
+    };
+    appData.addSale(sale);
+    amountController.clear();
+
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Sale added successfully')));
+
+    _initCountdown();
   }
 
   void _editLastSale() {
@@ -111,6 +180,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
   @override
   void dispose() {
     _countdownTimer?.cancel();
+    amountController.dispose();
     super.dispose();
   }
 
@@ -118,8 +188,14 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Add Sale"),
+        title: const Text('Add Sale'),
         backgroundColor: Colors.deepPurple,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout, color: Colors.red),
+            onPressed: () => showPlatformLogoutDialog(context),
+          ),
+        ],
       ),
       body: Padding(
         padding: const EdgeInsets.all(16),
@@ -129,7 +205,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
               controller: amountController,
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(
-                labelText: "Sale Amount",
+                labelText: 'Sale Amount',
                 prefixIcon: Icon(Icons.attach_money),
                 border: OutlineInputBorder(),
               ),
@@ -138,33 +214,28 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
             ElevatedButton.icon(
               onPressed: _submitSale,
               icon: const Icon(Icons.save),
-              label: const Text("Submit Sale"),
+              label: const Text('Submit Sale'),
             ),
-            if (_remainingTime != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 20),
-                child: Column(
-                  children: [
-                    Text(
-                      "⏱ Edit Available: ${_remainingTime!.inMinutes.remainder(60).toString().padLeft(2, '0')}:${_remainingTime!.inSeconds.remainder(60).toString().padLeft(2, '0')}",
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: Colors.redAccent,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    ElevatedButton.icon(
-                      onPressed: _editLastSale,
-                      icon: const Icon(Icons.edit),
-                      label: const Text("Edit Last Sale"),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.orange,
-                        foregroundColor: Colors.white,
-                      ),
-                    ),
-                  ],
+            if (_remainingTime != null) ...[
+              const SizedBox(height: 20),
+              Text(
+                '⏱ Edit Available: ${_remainingTime!.inMinutes.remainder(60).toString().padLeft(2, '0')}:${_remainingTime!.inSeconds.remainder(60).toString().padLeft(2, '0')}',
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.redAccent,
                 ),
               ),
+              const SizedBox(height: 8),
+              ElevatedButton.icon(
+                onPressed: _editLastSale,
+                icon: const Icon(Icons.edit),
+                label: const Text('Edit Last Sale'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.orange,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ],
           ],
         ),
       ),

@@ -6,29 +6,22 @@ import '../providers/app_data_provider.dart';
 import '../widgets/summary_card.dart';
 import '../widgets/quick_action_button.dart';
 import '../widgets/shop_card.dart';
+import '../screens/add_order_screen.dart';
 import '../screens/add_sale_screen.dart';
 import '../screens/reports_screen.dart';
-import '../screens/add_employee_and_access_screen.dart';
 import '../screens/add_shop_screen.dart';
-import '../screens/profile_screen.dart';
+import '../screens/add_employee_and_access_screen.dart';
 import '../screens/orders_screen.dart';
-import '../screens/add_order_screen.dart';
 import '../screens/sales_screen.dart';
-import '../screens/admin_orders_screen.dart';
+import '../screens/profile_screen.dart';
+// import '../screens/admin_orders_screen.dart';
 import '../screens/login_screen.dart';
 import '../screens/all_shops_screen.dart';
 import '../screens/shop_detail_screen.dart';
 
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
-
-  @override
-  State<HomeScreen> createState() => _HomeScreenState();
-}
-
+/// Shows a confirmation dialog before logging out.
 void showPlatformLogoutDialog(BuildContext context) {
   final appData = Provider.of<AppDataProvider>(context, listen: false);
-
   if (Platform.isIOS) {
     showCupertinoDialog(
       context: context,
@@ -85,8 +78,58 @@ void showPlatformLogoutDialog(BuildContext context) {
   }
 }
 
+/// Shows a confirmation dialog before exiting the app.
+Future<bool> showPlatformExitDialog(BuildContext context) async {
+  final choice = await (Platform.isIOS
+      ? showCupertinoDialog<bool>(
+          context: context,
+          builder: (ctx) => CupertinoAlertDialog(
+            title: const Text('Exit App?'),
+            content: const Text('Do you want to quit the app?'),
+            actions: [
+              CupertinoDialogAction(
+                child: const Text('Cancel'),
+                onPressed: () => Navigator.of(ctx).pop(false),
+              ),
+              CupertinoDialogAction(
+                isDestructiveAction: true,
+                child: const Text('Quit'),
+                onPressed: () => Navigator.of(ctx).pop(true),
+              ),
+            ],
+          ),
+        )
+      : showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Exit App'),
+            content: const Text('Do you want to quit the app?'),
+            actions: [
+              TextButton(
+                child: const Text('Cancel'),
+                onPressed: () => Navigator.of(ctx).pop(false),
+              ),
+              TextButton(
+                child: const Text('Quit'),
+                onPressed: () => Navigator.of(ctx).pop(true),
+              ),
+            ],
+          ),
+        ));
+  return choice ?? false;
+}
+
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
 class _HomeScreenState extends State<HomeScreen> {
   int _selectedIndex = 0;
+
+  void _onLogoutTap() => showPlatformLogoutDialog(context);
 
   @override
   Widget build(BuildContext context) {
@@ -95,61 +138,54 @@ class _HomeScreenState extends State<HomeScreen> {
     final name = user['name'] ?? 'User';
     final role = (user['role'] ?? 'employee').toString().toLowerCase();
 
-    final List<Widget> pages = [
+    final pages = <Widget>[
       const HomeDashboard(),
       if (role == 'admin' || role == 'manager' || role == 'employee')
         const OrdersScreen(),
       if (role == 'admin' || role == 'manager') const SalesScreen(),
-      const ProfileScreen(), // ✅ Now available to all roles
+      const ProfileScreen(),
     ];
 
-    final List<BottomNavigationBarItem> navItems = [
-      const BottomNavigationBarItem(icon: Icon(Icons.dashboard), label: "Home"),
+    final navItems = <BottomNavigationBarItem>[
+      const BottomNavigationBarItem(icon: Icon(Icons.dashboard), label: 'Home'),
       if (role == 'admin' || role == 'manager' || role == 'employee')
         const BottomNavigationBarItem(
           icon: Icon(Icons.receipt),
-          label: "Orders",
+          label: 'Orders',
         ),
       if (role == 'admin' || role == 'manager')
         const BottomNavigationBarItem(
           icon: Icon(Icons.attach_money),
-          label: "Sales",
+          label: 'Sales',
         ),
-      const BottomNavigationBarItem(
-        // ✅ Shown to all roles
-        icon: Icon(Icons.person),
-        label: "Profile",
-      ),
+      const BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
     ];
 
-    if (navItems.length < 2) {
-      return const Scaffold(
-        body: Center(child: Text("Invalid role or insufficient menu items.")),
-      );
-    }
-
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.deepPurple,
-        title: Text(
-          "$name (${role[0].toUpperCase()}${role.substring(1)})",
-          style: const TextStyle(color: Colors.white),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout, color: Colors.red),
-            tooltip: "Logout",
-            onPressed: () => showPlatformLogoutDialog(context),
+    return WillPopScope(
+      onWillPop: () => showPlatformExitDialog(context),
+      child: Scaffold(
+        appBar: AppBar(
+          backgroundColor: Colors.deepPurple,
+          title: Text(
+            '$name (${role[0].toUpperCase()}${role.substring(1)})',
+            style: const TextStyle(color: Colors.white),
           ),
-        ],
-      ),
-      body: pages[_selectedIndex],
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _selectedIndex,
-        onTap: (index) => setState(() => _selectedIndex = index),
-        selectedItemColor: Colors.deepPurple,
-        unselectedItemColor: Colors.grey,
-        items: navItems,
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.logout, color: Colors.red),
+              tooltip: 'Logout',
+              onPressed: _onLogoutTap,
+            ),
+          ],
+        ),
+        body: pages[_selectedIndex],
+        bottomNavigationBar: BottomNavigationBar(
+          currentIndex: _selectedIndex,
+          onTap: (i) => setState(() => _selectedIndex = i),
+          selectedItemColor: Colors.deepPurple,
+          unselectedItemColor: Colors.grey,
+          items: navItems,
+        ),
       ),
     );
   }
@@ -163,14 +199,9 @@ class HomeDashboard extends StatelessWidget {
     final appData = Provider.of<AppDataProvider>(context);
     final user = appData.loggedInUser ?? {};
     final role = user['role']?.toLowerCase() ?? 'employee';
-    debugPrint("👤 Logged in user: $user");
-
-    // 👤 Get employee assigned shops
     final rawAssigned = user['assignedShops'] ?? <dynamic>[];
     final assignedShops = List<String>.from(rawAssigned);
-
-    final List<Map<String, dynamic>> shops =
-        (role == 'admin' || role == 'manager')
+    final shops = (role == 'admin' || role == 'manager')
         ? appData.shops
         : appData.shops
               .where((shop) => assignedShops.contains(shop['name']))
@@ -183,11 +214,10 @@ class HomeDashboard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              "Dashboard Overview",
+              'Dashboard Overview',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
-
             GridView.count(
               crossAxisCount: 2,
               shrinkWrap: true,
@@ -308,7 +338,7 @@ class HomeDashboard extends StatelessWidget {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => const AdminOrdersScreen(),
+                          builder: (_) => const OrdersScreen(),
                         ),
                       );
                     },
@@ -321,7 +351,7 @@ class HomeDashboard extends StatelessWidget {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => const AdminOrdersScreen(),
+                          builder: (_) => const OrdersScreen(),
                         ),
                       );
                     },
