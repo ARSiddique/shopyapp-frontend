@@ -124,6 +124,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // ignore_for_file: deprecated_member_use
     return WillPopScope(
       onWillPop: () async {
         final shouldExit = await _onWillPop();

@@ -160,7 +160,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       const BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
     ];
-
+// ignore_for_file: deprecated_member_use
     return WillPopScope(
       onWillPop: () => showPlatformExitDialog(context),
       child: Scaffold(

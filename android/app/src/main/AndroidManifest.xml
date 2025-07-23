@@ -1,4 +1,6 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest
+     xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.ars.shopyapp">
     <application
         android:label="shopy_app"
         android:name="${applicationName}"
