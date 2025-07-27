@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_data_provider.dart';
+import '../utils/delete_shop_dialog.dart';
 
 class ShopDetailScreen extends StatelessWidget {
   final String shopName;
@@ -13,10 +14,19 @@ class ShopDetailScreen extends StatelessWidget {
     final user = appData.loggedInUser ?? {};
     final role = user['role'] ?? 'employee';
 
-    final shop = appData.shops.firstWhere(
+   final shop = appData.shops.firstWhere(
       (s) => s['name'] == shopName,
       orElse: () => {},
     );
+
+    if (shop.isEmpty) {
+      return Scaffold(
+        appBar: AppBar(title: const Text("Shop Not Found")),
+        body: const Center(
+          child: Text("This shop has been deleted or does not exist."),
+        ),
+      );
+    }
 
     final employeeNames = List<String>.from(shop['employees'] ?? []);
     final employees = employeeNames
@@ -32,8 +42,14 @@ class ShopDetailScreen extends StatelessWidget {
             IconButton(
               icon: const Icon(Icons.delete, color: Colors.white),
               onPressed: () {
-                appData.deleteShopByName(shopName);
-                Navigator.pop(context);
+                showDeleteShopDialog(
+                  context: context,
+                  shopName: shopName,
+                  onConfirmed: () {
+                    appData.deleteShopByName(shopName);
+                    Navigator.pop(context);
+                  },
+                );
               },
             ),
         ],

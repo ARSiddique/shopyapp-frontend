@@ -1,9 +1,13 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import '../providers/app_data_provider.dart';
-import 'home_screen.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'login_screen.dart';
+import 'home_screen.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import '../providers/app_data_provider.dart';
+import 'package:provider/provider.dart';
+
+
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -23,26 +27,40 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   void _startTimer() {
-    setState(() {
-      _hasError = false;
-    });
-    _timer = Timer(const Duration(seconds: 3), _navigate);
+    setState(() => _hasError = false);
+    _timer = Timer(const Duration(seconds: 2), _navigate);
   }
 
-  void _navigate() {
+ void _navigate() async {
     try {
-      final appData = Provider.of<AppDataProvider>(context, listen: false);
-      final nextScreen = appData.loggedInUser != null
+      final user = FirebaseAuth.instance.currentUser;
+
+      if (user != null) {
+        // Fetch role from Firestore
+        final doc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .get();
+
+        if (doc.exists) {
+          final userData = doc.data()!;
+          if (!mounted) return;
+          final appData = Provider.of<AppDataProvider>(context, listen: false);
+          appData.loginUser(userData); // Store user data (with role etc.)
+          await appData.fetchAllData(); // Optional: preload data
+        }
+      }
+
+      final nextScreen = user != null
           ? const HomeScreen()
           : const LoginScreen();
+if (!mounted) return;
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => nextScreen),
       );
     } catch (e) {
-      setState(() {
-        _hasError = true;
-      });
+      setState(() => _hasError = true);
     }
   }
 

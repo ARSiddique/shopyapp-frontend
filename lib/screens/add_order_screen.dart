@@ -17,12 +17,14 @@ class _AddOrderScreenState extends State<AddOrderScreen> {
 
   String paymentType = "Cash";
 
-  void _submitOrder() {
+ void _submitOrder() async {
+
     if (_formKey.currentState!.validate()) {
       final appData = Provider.of<AppDataProvider>(context, listen: false);
       final user = appData.loggedInUser;
 
       if (user == null || user['role'] != 'employee') {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Only employees can submit orders")),
         );
@@ -45,8 +47,10 @@ class _AddOrderScreenState extends State<AddOrderScreen> {
         'notes': _notesController.text.trim(),
       };
 
-      appData.addOrder(order);
+     await appData.addOrder(order);
 
+
+     if (!mounted) return; // ✅ Safety check
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Order submitted successfully!")),
       );
@@ -78,6 +82,7 @@ class _AddOrderScreenState extends State<AddOrderScreen> {
               // Display Info
               Text("Employee: $employeeName"),
               Text("Shop: $assignedShop"),
+              
               const SizedBox(height: 20),
 
               // Items Ordered

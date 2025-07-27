@@ -126,12 +126,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
           'Profile & Settings',
           style: TextStyle(color: Colors.white),
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout, color: Colors.red),
-            onPressed: () => showPlatformLogoutDialog(context),
-          ),
-        ],
+        // actions: [
+        //   IconButton(
+        //     icon: const Icon(Icons.logout, color: Colors.red),
+        //     onPressed: () => showPlatformLogoutDialog(context),
+        //   ),
+        // ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(20),
@@ -190,6 +190,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ],
             ),
           ),
+
+
+
+
           const SizedBox(height: 30),
           // Editable Fields
           TextField(

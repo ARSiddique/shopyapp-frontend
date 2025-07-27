@@ -22,9 +22,13 @@ class _AllShopsScreenState extends State<AllShopsScreen> {
     final role = user?['role'] ?? 'employee';
     final isAdmin = role == 'admin' || role == 'owner';
 
-    final visibleShops = appData.shops.where((shop) {
-      return shop['name'].toLowerCase().contains(searchQuery.toLowerCase());
-    }).toList();
+    final visibleShops = appData.shops
+        .where(
+          (shop) =>
+              shop['isDeleted'] != true &&
+              shop['name'].toLowerCase().contains(searchQuery.toLowerCase()),
+        )
+        .toList();
 
     return Scaffold(
       appBar: AppBar(
@@ -67,7 +71,7 @@ class _AllShopsScreenState extends State<AllShopsScreen> {
                             children: [
                               ListTile(
                                 title: Text(
-                                  "Status: ${shop['isOpen'] ? 'Open' : 'Closed'}",
+                                  "Status: ${shop['isOpen'] == true ? 'Open' : 'Closed'}",
                                 ),
                               ),
                               if (employeeNames.isEmpty)

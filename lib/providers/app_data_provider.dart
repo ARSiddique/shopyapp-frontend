@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 
 class AppDataProvider extends ChangeNotifier {
   
@@ -91,24 +93,47 @@ class AppDataProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void requestSaleEdit(int saleId, String reason) {
-    _editRequests.add({
-      'type': 'sale',
-      'itemId': saleId,
-      'reason': reason,
-      'requestedBy': _loggedInUser?['name'],
-      'timestamp': DateTime.now(),
-    });
-    notifyListeners();
+Future<void> requestSaleEdit(
+    int saleId,
+    String reason,
+    double newAmount,
+  ) async {
+    try {
+      final request = {
+        'type': 'sale',
+        'itemId': saleId,
+        'reason': reason,
+        'newAmount': newAmount,
+        'requestedBy': _loggedInUser?['name'] ?? 'Unknown',
+        'status': 'pending',
+        'timestamp': DateTime.now(),
+      };
+
+      final docRef = await FirebaseFirestore.instance
+          .collection('editRequests')
+          .add(request);
+
+      // Add to local list with firebaseId
+      _editRequests.add({'firebaseId': docRef.id, ...request});
+
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error submitting sale edit request: $e');
+    }
   }
 
-  void updateSaleAmount(int saleId, double newAmount) {
+  Future<void> updateSaleAmount(String saleId, double newAmount) async {
     final index = _sales.indexWhere((s) => s['id'] == saleId);
     if (index != -1) {
       _sales[index]['amount'] = newAmount;
       notifyListeners();
+
+      await FirebaseFirestore.instance.collection('sales').doc(saleId).update({
+        'amount': newAmount,
+      });
     }
   }
+
 
   void assignAccess(String shopName, String employeeName) {
     final shopIndex = shops.indexWhere((shop) => shop['name'] == shopName);
@@ -141,9 +166,26 @@ class AppDataProvider extends ChangeNotifier {
   //     }
   //   }
 
-  void deleteShopByName(String name) {
-    shops.removeWhere((shop) => shop['name'] == name);
-    notifyListeners();
+ Future<void> deleteShopByName(String name) async {
+    try {
+      final shopDoc = await FirebaseFirestore.instance
+          .collection('shops')
+          .where('name', isEqualTo: name)
+          .limit(1)
+          .get();
+
+      if (shopDoc.docs.isNotEmpty) {
+        await shopDoc.docs.first.reference.update({
+          'isDeleted': true,
+          'deletedAt': Timestamp.now(),
+        });
+      }
+
+      shops.removeWhere((shop) => shop['name'] == name);
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error soft deleting shop: $e');
+    }
   }
 
   void updateShop(String originalName, Map<String, dynamic> updatedData) {
@@ -163,15 +205,24 @@ class AppDataProvider extends ChangeNotifier {
   // ---------------------------
   // List<Map<String, dynamic>> get orders => [..._orders];
 
-  void addOrder(Map<String, dynamic> order) {
-    if (order.isNotEmpty) {
+ Future<void> addOrder(Map<String, dynamic> order) async {
+    try {
       order['status'] = 'Pending';
       order['createdAt'] = DateTime.now();
       order['canRequestEdit'] = true;
+
+      await FirebaseFirestore.instance
+          .collection('orders')
+          .doc(order['id'].toString())
+          .set(order);
+
       _orders.add(order);
       notifyListeners();
+    } catch (e) {
+      debugPrint('Error adding order: $e');
     }
   }
+
 
   void forwardOrder(int id) {
     final index = _orders.indexWhere((order) => order['id'] == id);
@@ -189,18 +240,34 @@ class AppDataProvider extends ChangeNotifier {
     }
   }
 
-  void deleteOrder(String id) {
-    _orders.removeWhere((o) => o['id'] == id);
-    notifyListeners();
-  }
-
-  void editOrder(Map<String, dynamic> updatedOrder) {
-    final index = _orders.indexWhere((o) => o['id'] == updatedOrder['id']);
-    if (index != -1) {
-      _orders[index] = updatedOrder;
+  Future<void> deleteOrder(String id) async {
+    try {
+      await FirebaseFirestore.instance.collection('orders').doc(id).delete();
+      _orders.removeWhere((o) => o['id'] == id);
       notifyListeners();
+    } catch (e) {
+      debugPrint('Error deleting order: $e');
     }
   }
+
+  Future<void> editOrder(Map<String, dynamic> updatedOrder) async {
+    try {
+      final orderId = updatedOrder['id'].toString();
+      await FirebaseFirestore.instance
+          .collection('orders')
+          .doc(orderId)
+          .update(updatedOrder);
+
+      final index = _orders.indexWhere((o) => o['id'] == updatedOrder['id']);
+      if (index != -1) {
+        _orders[index] = updatedOrder;
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('Error updating order: $e');
+    }
+  }
+
 
   bool canEditOrder(Map<String, dynamic> order) {
     final createdAt = order['createdAt'] as DateTime?;
@@ -232,55 +299,75 @@ class AppDataProvider extends ChangeNotifier {
     }).toList();
   }
   
- void addSale(Map<String, dynamic> saleData) {
-    if (saleData.isNotEmpty && saleData['amount'] != null) {
-      saleData['createdAt'] = DateTime.now();
-      saleData['canRequestEdit'] = true;
-      saleData['addedBy'] = _loggedInUser?['name'];
-      _sales.add(saleData);
-      notifyListeners();
+ Future<void> addSale(Map<String, dynamic> saleData) async {
+    if (saleData.isNotEmpty && saleData['total'] != null) {
+      try {
+        final docRef = await FirebaseFirestore.instance
+            .collection('sales')
+            .add(saleData);
+        saleData['id'] = docRef.id; // store firestore ID as 'id'
+        _sales.add(saleData);
+        notifyListeners();
+      } catch (e) {
+        debugPrint('Error adding sale: $e');
+      }
     }
   }
+
+
 
 /// Returns only the sale‑type edit requests
   List<Map<String, dynamic>> get salesEditRequests =>
       _editRequests.where((r) => r['type'] == 'sale').toList();
 
-  /// Approve a sale‑edit request:
-  /// 1. Applies the `newAmount` to the sale.
-  /// 2. Removes the request.
-  /// 3. Notifies listeners.
-  void approveSaleEdit(int requestId) {
-    // Locate the request
-    final reqIndex = _editRequests.indexWhere(
-      (r) => r['type'] == 'sale' && r['itemId'] == requestId,
-    );
-    if (reqIndex == -1) return;
+  Future<void> approveSaleEdit(String firebaseId) async {
+    try {
+      final reqIndex = _editRequests.indexWhere(
+        (r) => r['firebaseId'] == firebaseId,
+      );
+      if (reqIndex == -1) return;
 
-    final req = _editRequests[reqIndex];
-    final itemId = req['itemId'] as int;
-    final newAmount = req['newAmount'] as double;
+      final request = _editRequests[reqIndex];
+      final itemId = request['itemId'];
+      final newAmount = request['newAmount'];
 
-    // Update the sale’s amount
-    final saleIndex = _sales.indexWhere((s) => s['id'] == itemId);
-    if (saleIndex != -1) {
-      _sales[saleIndex]['amount'] = newAmount;
+      // Update sale amount in Firebase
+      await FirebaseFirestore.instance.collection('sales').doc(itemId).update({
+        'amount': newAmount,
+      });
+
+      // Mark request as approved
+      await FirebaseFirestore.instance
+          .collection('editRequests')
+          .doc(firebaseId)
+          .update({'status': 'approved'});
+
+      // Refresh locally
+      await fetchEditRequests();
+      await fetchSales();
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error approving sale edit: $e');
     }
-
-    // Remove the request and refresh
-    _editRequests.removeAt(reqIndex);
-    notifyListeners();
   }
+
+
+
 
   /// Reject a sale‑edit request (just removes it)
-  void rejectSaleEdit(int requestId) {
-    _editRequests.removeWhere(
-      (r) => r['type'] == 'sale' && r['itemId'] == requestId,
-    );
-    notifyListeners();
+Future<void> rejectSaleEdit(String firebaseId) async {
+    try {
+      await FirebaseFirestore.instance
+          .collection('editRequests')
+          .doc(firebaseId)
+          .update({'status': 'rejected'});
+
+      await fetchEditRequests();
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error rejecting sale edit: $e');
+    }
   }
-
-
 
 
 
@@ -302,10 +389,13 @@ void updateProfile({String? email, String? phone, String? password}) {
     }
   }
 
-  void deleteSale(String id) {
+ Future<void> deleteSale(String id) async {
     _sales.removeWhere((s) => s['id'] == id);
     notifyListeners();
+    await FirebaseFirestore.instance.collection('sales').doc(id).delete();
   }
+
+
 
   List<Map<String, dynamic>> getEmployeeSales(String employeeName) {
     final now = DateTime.now();
@@ -324,7 +414,7 @@ void updateProfile({String? email, String? phone, String? password}) {
   // ---------------------------
   int get totalOrders => _orders.length;
   double get totalSales =>
-      _sales.fold(0.0, (sum, s) => sum + (s['amount'] ?? 0.0));
+      _sales.fold(0.0, (sumValue, s) => sumValue + (s['amount'] ?? 0.0));
   int get totalShops => shops.length;
   int get totalEmployees => employees.length;
 
@@ -336,4 +426,190 @@ void updateProfile({String? email, String? phone, String? password}) {
 
   List<Map<String, dynamic>> get receivedOrders =>
       _orders.where((o) => o['status'] == 'Received').toList();
+List<Map<String, dynamic>> getFilteredSales(String filter) {
+    final now = DateTime.now();
+
+    return sales.where((sale) {
+      final date = sale['createdAt']?.toDate() ?? now;
+
+      if (filter == 'Daily') {
+        return date.year == now.year &&
+            date.month == now.month &&
+            date.day == now.day;
+      } else if (filter == 'Weekly') {
+        final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
+        return date.isAfter(startOfWeek);
+      } else if (filter == 'Monthly') {
+        return date.year == now.year && date.month == now.month;
+      }
+      return true;
+    }).toList();
+  }
+
+  Map<String, String> getFilteredTotals(String filter) {
+    double cash = 0.0;
+    double card = 0.0;
+    double other = 0.0;
+
+    final filtered = getFilteredSales(filter);
+    for (var sale in filtered) {
+      cash += double.tryParse(sale['cash'].toString()) ?? 0.0;
+      card += double.tryParse(sale['card'].toString()) ?? 0.0;
+      other += double.tryParse(sale['other'].toString()) ?? 0.0;
+    }
+
+    return {
+      'cash': 'Rs. ${cash.toStringAsFixed(0)}',
+      'card': 'Rs. ${card.toStringAsFixed(0)}',
+      'other': 'Rs. ${other.toStringAsFixed(0)}',
+    };
+  }
+
+Future<void> approveEditRequest(String requestId) async {
+    try {
+      await FirebaseFirestore.instance
+          .collection('editRequests')
+          .doc(requestId)
+          .update({'status': 'approved'});
+
+      // Refresh local data
+      await fetchAllData();
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error approving edit request: $e');
+    }
+  }
+
+  Future<void> rejectEditRequest(String requestId) async {
+    try {
+      await FirebaseFirestore.instance
+          .collection('editRequests')
+          .doc(requestId)
+          .update({'status': 'rejected'});
+
+      // Refresh local data
+      await fetchAllData();
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error rejecting edit request: $e');
+    }
+  }
+  Future<void> fetchUsers() async {
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .get();
+      employees.clear();
+      employees.addAll(snapshot.docs.map((doc) => doc.data()));
+    } catch (e) {
+      debugPrint('Error fetching users: $e');
+    }
+  }
+
+ Future<void> fetchShops() async {
+    final snapshot = await FirebaseFirestore.instance.collection('shops').get();
+    shops = snapshot.docs
+        .map((doc) => doc.data())
+        .where((shop) => shop['isDeleted'] != true) // ✅ Ignore deleted shops
+        .toList();
+    notifyListeners();
+  }
+Future<void> fetchOrders() async {
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('orders')
+          .get();
+     _orders.clear();
+      _orders.addAll(snapshot.docs.map((doc) => doc.data()));
+
+    } catch (e) {
+      debugPrint('Error fetching orders: $e');
+    }
+  }
+Future<void> fetchSales() async {
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('sales')
+          .get();
+
+      _sales.clear();
+      _sales.addAll(
+        snapshot.docs.map((doc) {
+          final data = doc.data();
+          return {
+            'id': doc.id,
+            ...data,
+            'createdAt': (data['createdAt'] as Timestamp).toDate(),
+          };
+        }),
+      );
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error fetching sales: $e');
+    }
+  }
+
+Future<void> fetchEditRequests() async {
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('editRequests')
+          .get();
+      _editRequests.clear();
+      _editRequests.addAll(
+        snapshot.docs.map((doc) => {'firebaseId': doc.id, ...doc.data()}),
+      );
+    } catch (e) {
+      debugPrint('Error fetching edit requests: $e');
+    }
+  }
+
+
+  Future<void> fetchAllData() async {
+    await fetchUsers();
+    await fetchShops();
+    await fetchOrders();
+    await fetchSales();
+    await fetchEditRequests(); // fetches editRequests from Firebase
+    notifyListeners();
+  }
+
+      void startFirebaseListeners() {
+    FirebaseFirestore.instance.collection('shops').snapshots().listen((
+      snapshot,
+    ) {
+      shops = snapshot.docs.map((doc) => doc.data()).toList();
+      notifyListeners();
+    });
+
+    FirebaseFirestore.instance.collection('employees').snapshots().listen((
+      snapshot,
+    ) {
+      employees = snapshot.docs.map((doc) => doc.data()).toList();
+      notifyListeners();
+    });
+
+    FirebaseFirestore.instance.collection('orders').snapshots().listen((
+      snapshot,
+    ) {
+      _orders.clear();
+      _orders.addAll(snapshot.docs.map((doc) => doc.data()));
+      notifyListeners();
+    });
+
+    FirebaseFirestore.instance.collection('sales').snapshots().listen((
+      snapshot,
+    ) {
+      _sales.clear();
+      _sales.addAll(snapshot.docs.map((doc) => doc.data()));
+      notifyListeners();
+    });
+
+    FirebaseFirestore.instance.collection('editRequests').snapshots().listen((
+      snapshot,
+    ) {
+      _editRequests.clear();
+      _editRequests.addAll(snapshot.docs.map((doc) => doc.data()));
+      notifyListeners();
+    });
+  }
 }

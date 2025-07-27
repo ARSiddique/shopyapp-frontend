@@ -3,6 +3,9 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 import '../providers/app_data_provider.dart';
 import 'home_screen.dart';
 
@@ -14,27 +17,28 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _codeController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
   bool _obscurePassword = true;
   bool _isLoading = false;
+  String? _error;
 
   @override
   void dispose() {
-    _nameController.dispose();
-    _codeController.dispose();
+    _emailController.dispose();
+    _passwordController.dispose();
     super.dispose();
   }
 
   Future<void> _handleLogin() async {
     FocusScope.of(context).unfocus();
-    final name = _nameController.text.trim().toLowerCase();
-    final code = _codeController.text.trim();
+    final email = _emailController.text.trim();
+    final password = _passwordController.text.trim();
 
-    if (name.isEmpty || code.isEmpty) {
+    if (email.isEmpty || password.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text('Please enter both name and code'),
+          content: const Text('Please enter both email and password'),
           backgroundColor: Theme.of(context).colorScheme.error,
         ),
       );
@@ -43,40 +47,42 @@ class _LoginScreenState extends State<LoginScreen> {
 
     setState(() => _isLoading = true);
     try {
-      final appData = Provider.of<AppDataProvider>(context, listen: false);
-      bool success = false;
-      if (name == 'admin' && code == '1234') {
-        final adminUser = {
-          'name': 'Admin',
-          'email': 'admin@shopy.com',
-          'role': 'admin',
-        };
-        appData.loginUser(adminUser);
-        success = true;
-      } else {
-        success =  appData.loginWithNameAndCode(name, code);
-      }
-
-      if (success) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const HomeScreen()),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Invalid Name or Code'),
-            backgroundColor: Theme.of(context).colorScheme.error,
-          ),
-        );
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('An error occurred during login'),
-          backgroundColor: Theme.of(context).colorScheme.error,
-        ),
+      // ✅ Sign in with Firebase Auth
+      final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: email,
+        password: password,
       );
+
+      final user = credential.user;
+      if (user != null && mounted) {
+        // ✅ Fetch role from Firestore `users` collection
+        final querySnapshot = await FirebaseFirestore.instance
+            .collection('users')
+            .where('email', isEqualTo: user.email)
+            .limit(1)
+            .get();
+
+        if (querySnapshot.docs.isNotEmpty) {
+          final userData = querySnapshot.docs.first.data();
+          final role = userData['role'] ?? 'employee';
+
+          Provider.of<AppDataProvider>(
+            context,
+            listen: false,
+          ).loginUser({'email': user.email, 'uid': user.uid, 'role': role});
+
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const HomeScreen()),
+          );
+        } else {
+          setState(() => _error = 'User not found in Firestore.');
+        }
+      }
+    } on FirebaseAuthException catch (e) {
+      setState(() => _error = e.message);
+    } catch (e) {
+      setState(() => _error = 'Something went wrong.');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -97,9 +103,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     CupertinoDialogAction(
                       isDestructiveAction: true,
                       child: const Text('Quit'),
-                      onPressed: () {
-                        Navigator.of(ctx).pop(true);
-                      },
+                      onPressed: () => Navigator.of(ctx).pop(true),
                     ),
                   ],
                 )
@@ -124,14 +128,11 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // ignore_for_file: deprecated_member_use
-    return WillPopScope(
-      onWillPop: () async {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
         final shouldExit = await _onWillPop();
-        if (shouldExit) {
-          SystemNavigator.pop();
-        }
-        return false;
+        if (shouldExit) SystemNavigator.pop();
       },
       child: Scaffold(
         backgroundColor: theme.scaffoldBackgroundColor,
@@ -163,30 +164,29 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                   ),
                   const SizedBox(height: 30),
+                  if (_error != null)
+                    Text(
+                      _error!,
+                      style: TextStyle(color: theme.colorScheme.error),
+                    ),
+                  const SizedBox(height: 10),
                   TextField(
-                    controller: _nameController,
+                    controller: _emailController,
+                    keyboardType: TextInputType.emailAddress,
                     decoration: InputDecoration(
-                      labelText: 'Name',
+                      labelText: 'Email',
                       border: const OutlineInputBorder(),
-                      prefixIcon: Icon(
-                        Icons.person,
-                        color: theme.iconTheme.color,
-                      ),
+                      prefixIcon: Icon(Icons.person),
                     ),
                   ),
                   const SizedBox(height: 20),
                   TextField(
-                    controller: _codeController,
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    controller: _passwordController,
                     obscureText: _obscurePassword,
                     decoration: InputDecoration(
-                      labelText: 'Login Code',
+                      labelText: 'Password',
                       border: const OutlineInputBorder(),
-                      prefixIcon: Icon(
-                        Icons.lock,
-                        color: theme.iconTheme.color,
-                      ),
+                      prefixIcon: const Icon(Icons.lock),
                       suffixIcon: IconButton(
                         icon: Icon(
                           _obscurePassword
@@ -223,7 +223,6 @@ class _LoginScreenState extends State<LoginScreen> {
                         backgroundColor: theme.colorScheme.primary,
                         foregroundColor: theme.colorScheme.onPrimary,
                         padding: const EdgeInsets.symmetric(vertical: 14),
-                        textStyle: const TextStyle(fontSize: 16),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),

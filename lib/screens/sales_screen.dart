@@ -1,70 +1,11 @@
-import 'dart:async';
-import 'dart:io' show Platform;
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:intl/intl.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../providers/app_data_provider.dart';
+import '../widgets/summary_card.dart';
+import '../widgets/search_and_filter_bar.dart';
 import '../widgets/edit_sale_modal.dart';
-import '../screens/login_screen.dart';
-
-/// Shows a confirmation dialog before logging out.
-void showPlatformLogoutDialog(BuildContext context) {
-  final appData = Provider.of<AppDataProvider>(context, listen: false);
-  if (Platform.isIOS) {
-    showCupertinoDialog(
-      context: context,
-      builder: (_) => CupertinoAlertDialog(
-        title: const Text('Logout?'),
-        content: const Text('Are you sure you want to logout?'),
-        actions: [
-          CupertinoDialogAction(
-            child: const Text('Cancel'),
-            onPressed: () => Navigator.of(context).pop(),
-          ),
-          CupertinoDialogAction(
-            isDestructiveAction: true,
-            child: const Text('Logout'),
-            onPressed: () {
-              Navigator.of(context).pop();
-              appData.logout();
-              Navigator.pushAndRemoveUntil(
-                context,
-                MaterialPageRoute(builder: (_) => const LoginScreen()),
-                (_) => false,
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  } else {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Logout'),
-        content: const Text('Are you sure you want to logout?'),
-        actions: [
-          TextButton(
-            child: const Text('Cancel'),
-            onPressed: () => Navigator.of(context).pop(),
-          ),
-          TextButton(
-            child: const Text('Logout'),
-            onPressed: () {
-              Navigator.of(context).pop();
-              appData.logout();
-              Navigator.pushAndRemoveUntil(
-                context,
-                MaterialPageRoute(builder: (_) => const LoginScreen()),
-                (_) => false,
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 class SalesScreen extends StatefulWidget {
   const SalesScreen({super.key});
@@ -74,27 +15,124 @@ class SalesScreen extends StatefulWidget {
 }
 
 class _SalesScreenState extends State<SalesScreen> {
-  Timer? _timer;
+  String _searchQuery = '';
+  String _statusFilter = 'All';
+void _showRequestEditDialog(BuildContext context, Map<String, dynamic> sale) {
+    final TextEditingController amountController = TextEditingController();
+    final TextEditingController reasonController = TextEditingController();
 
-  @override
-  void initState() {
-    super.initState();
-    // rebuild each second to update countdown timers
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() {});
-    });
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Request Sale Edit'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: amountController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'New Amount'),
+            ),
+            TextField(
+              controller: reasonController,
+              decoration: const InputDecoration(labelText: 'Reason'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final newAmount =
+                  double.tryParse(amountController.text.trim()) ?? 0.0;
+              final reason = reasonController.text.trim();
+
+              if (newAmount > 0 && reason.isNotEmpty) {
+                Provider.of<AppDataProvider>(
+                  context,
+                  listen: false,
+                ).requestSaleEdit(sale['id'], reason, newAmount);
+
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Edit request sent')),
+                );
+              }
+            },
+            child: const Text('Submit'),
+          ),
+        ],
+      ),
+    );
   }
 
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
+  void _confirmDelete(String saleId) async {
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete Sale?'),
+        content: const Text('This action cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted || shouldDelete != true) return;
+
+    // Delete from Firebase
+    await FirebaseFirestore.instance.collection('sales').doc(saleId).delete();
+    if (!mounted) return;
+    Provider.of<AppDataProvider>(context, listen: false).deleteSale(saleId);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Sale deleted')),
+    );
   }
 
-  String _formatCountdown(int seconds) {
-    final minutes = (seconds ~/ 60).toString().padLeft(2, '0');
-    final secs = (seconds % 60).toString().padLeft(2, '0');
-    return '$minutes:$secs';
+  void _openEditSaleModal(BuildContext context, Map<String, dynamic> sale) {
+    showDialog(
+      context: context,
+      builder: (_) => EditSaleModal(
+        initialAmount: (sale['total'] ?? 0).toDouble(),
+        onSubmit: (newAmount) async {
+          final appData = Provider.of<AppDataProvider>(context, listen: false);
+          final updated = Map<String, dynamic>.from(sale);
+          updated['total'] = newAmount;
+
+          try {
+            
+            await FirebaseFirestore.instance
+                .collection('sales')
+                .doc(sale['id'].toString())
+                .update({'total': newAmount});
+
+            appData.editSale(updated);
+            
+            if (context.mounted) Navigator.pop(context);
+
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Sale updated')),
+            );
+          } catch (e) {
+            debugPrint('Error updating sale: $e');
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Update failed')),
+            );
+          }
+        },
+      ),
+    );
   }
 
   @override
@@ -102,133 +140,146 @@ class _SalesScreenState extends State<SalesScreen> {
     final appData = Provider.of<AppDataProvider>(context);
     final user = appData.loggedInUser ?? {};
     final role = (user['role'] ?? '').toString().toLowerCase();
-    final employeeName = user['name'] as String? ?? '';
+    final name = user['name']?.toString() ?? '';
 
-    // Fetch sales list per role
-    final salesList = role == 'employee'
-        ? appData.sales
-        : role == 'manager'
-            ? appData.allSales
-            : appData.allSales;
+    List<Map<String, dynamic>> mySales = role == 'employee'
+        ? appData.sales.where((s) => s['employee'] == name).toList()
+        : appData.sales;
 
-    final title = role == 'employee'
-        ? 'My Recent Sales'
-        : role == 'manager'
-            ? 'Sales Overview'
-            : 'All Sales';
+    // Search + Filter
+    mySales = mySales.where((s) {
+      final matchesSearch = s['employee']
+          .toString()
+          .toLowerCase()
+          .contains(_searchQuery.toLowerCase());
+      final matchesFilter =
+          _statusFilter == 'All' || s['status'] == _statusFilter;
+      return matchesSearch && matchesFilter;
+    }).toList();
+
+    // Summary values
+    final totalCount = mySales.length;
+    final totalCash = mySales.fold<num>(
+        0, (sum, s) => sum + (s['cash'] is num ? s['cash'] : 0));
+    final totalCard = mySales.fold<num>(
+        0, (sum, s) => sum + (s['card'] is num ? s['card'] : 0));
+    final totalOther = mySales.fold<num>(
+        0, (sum, s) => sum + (s['other'] is num ? s['other'] : 0));
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(title),
         backgroundColor: Colors.deepPurple,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout, color: Colors.red),
-            onPressed: () => showPlatformLogoutDialog(context),
+        title: Text(
+          role == 'employee' ? 'My Sales' : 'All Sales',
+          style: const TextStyle(color: Colors.white),
+        ),
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                SummaryCard(
+                  icon: Icons.attach_money,
+                  title: 'Total',
+                  count: totalCount.toString(),
+                  color: Colors.deepPurple,
+                ),
+                SummaryCard(
+                  icon: Icons.money,
+                  title: 'Cash',
+                  count: totalCash.toStringAsFixed(0),
+                  color: Colors.green,
+                ),
+                SummaryCard(
+                  icon: Icons.credit_card,
+                  title: 'Card',
+                  count: totalCard.toStringAsFixed(0),
+                  color: Colors.blue,
+                ),
+                SummaryCard(
+                  icon: Icons.account_balance_wallet,
+                  title: 'Other',
+                  count: totalOther.toStringAsFixed(0),
+                  color: Colors.orange,
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: SearchAndFilterBar(
+              onSearchChanged: (query) => setState(() => _searchQuery = query),
+              filterOptions: const ['All', 'Pending', 'Forwarded', 'Received'],
+              selectedFilter: _statusFilter,
+              onFilterChanged: (value) =>
+                  setState(() => _statusFilter = value),
+            ),
+          ),
+          const Divider(),
+          Expanded(
+            child: mySales.isEmpty
+                ? const Center(child: Text('No sales yet'))
+                : ListView.separated(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: mySales.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    itemBuilder: (_, index) {
+                      final sale = mySales[index];
+                      final createdAt = sale['createdAt'];
+                      final displayTime = createdAt is Timestamp
+                          ? createdAt.toDate()
+                          : DateTime.tryParse(createdAt.toString());
+                      final formatted = displayTime != null
+                          ? DateFormat('dd MMM, hh:mm a').format(displayTime)
+                          : 'N/A';
+
+                      return Card(
+                        child: ListTile(
+                          title: Text('💵 Rs. ${sale['total']}'),
+                          subtitle: Text(
+                              '🧍 ${sale['employee']} - 🕒 $formatted'),
+                         trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                icon: const Icon(
+                                  Icons.edit,
+                                  color: Colors.orange,
+                                ),
+                                onPressed: () =>
+                                    _openEditSaleModal(context, sale),
+                              ),
+                              IconButton(
+                                icon: const Icon(
+                                  Icons.delete,
+                                  color: Colors.red,
+                                ),
+                                onPressed: () =>
+                                    _confirmDelete(sale['id'].toString()),
+                              ),
+                              if (role == 'employee')
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.request_page,
+                                    color: Colors.blue,
+                                  ),
+                                  onPressed: () =>
+                                      _showRequestEditDialog(context, sale),
+                                ),
+                            ],
+                          ),
+
+                        ),
+                      );
+                    },
+                  ),
           ),
         ],
       ),
-      body: salesList.isEmpty
-          ? Center(
-              child: Text(
-                role == 'employee'
-                    ? 'No recent sales to display.'
-                    : 'No sales recorded yet.',
-              ),
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: salesList.length,
-              itemBuilder: (_, index) {
-                final sale = salesList[index];
-                final createdAt = sale['createdAt'] as DateTime;
-                final elapsed = DateTime.now().difference(createdAt).inSeconds;
-                final canEdit = elapsed < 300;
-                final secondsLeft = 300 - elapsed;
-
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 16),
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('💲 Sale ID: ${sale['id']}'),
-                        Text('🏪 Shop: ${sale['shop']}'),
-                        Text('👤 Added by: ${sale['addedBy']}'),
-                        Text('💰 Amount: Rs. ${sale['amount']}'),
-                        Text('⏰ Time: ${createdAt.toLocal()}'),
-                        if (role == 'employee' && sale['addedBy'] == employeeName)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 8),
-                            child: Text(
-                              canEdit
-                                  ? '⏱ Edit left: ${_formatCountdown(secondsLeft)}'
-                                  : '❌ Edit time expired',
-                              style: TextStyle(
-                                color: canEdit ? Colors.orange : Colors.red,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                        const SizedBox(height: 12),
-                        Wrap(
-                          spacing: 8,
-                          children: [
-                            // Employee actions
-                            if (role == 'employee' && sale['addedBy'] == employeeName)
-                              if (canEdit)
-                                ElevatedButton.icon(
-                                  icon: const Icon(Icons.edit),
-                                  label: const Text('Edit'),
-                                  style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
-                                  onPressed: () => showDialog(
-                                    context: context,
-                                    builder: (_) => EditSaleModal(
-                                      initialAmount: sale['amount'] as double,
-                                      onSubmit: (updated) {
-                                        appData.updateSaleAmount(sale['id'], updated);
-                                        Navigator.of(context).pop();
-                                        ScaffoldMessenger.of(context).showSnackBar(
-                                          const SnackBar(content: Text('Sale updated')),
-                                        );
-                                      },
-                                    ),
-                                  ),)
-                              else
-                                ElevatedButton.icon(
-                                  icon: const Icon(Icons.request_page),
-                                  label: const Text('Request Edit'),
-                                  style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey),
-                                  onPressed: () {
-                                    appData.requestSaleEdit(sale['id'], employeeName);
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(content: Text('Edit request sent')),
-                                    );
-                                  },
-                                ),
-
-                            // Admin delete
-                            if (role == 'admin')
-                              ElevatedButton.icon(
-                                icon: const Icon(Icons.delete),
-                                label: const Text('Delete'),
-                                style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                                onPressed: () {
-                                  appData.deleteSale(sale['id'].toString());
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('Sale deleted')),
-                                  );
-                                },
-                              ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
     );
   }
 }

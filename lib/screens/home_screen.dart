@@ -1,7 +1,8 @@
-import 'dart:io' show Platform;
+import 'dart:io';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../providers/app_data_provider.dart';
 import '../widgets/summary_card.dart';
 import '../widgets/quick_action_button.dart';
@@ -14,7 +15,6 @@ import '../screens/add_employee_and_access_screen.dart';
 import '../screens/orders_screen.dart';
 import '../screens/sales_screen.dart';
 import '../screens/profile_screen.dart';
-// import '../screens/admin_orders_screen.dart';
 import '../screens/login_screen.dart';
 import '../screens/all_shops_screen.dart';
 import '../screens/shop_detail_screen.dart';
@@ -22,6 +22,9 @@ import '../screens/shop_detail_screen.dart';
 /// Shows a confirmation dialog before logging out.
 void showPlatformLogoutDialog(BuildContext context) {
   final appData = Provider.of<AppDataProvider>(context, listen: false);
+  // final activeShops = appData.shops
+  //     .where((shop) => shop['isDeleted'] != true)
+  //     .toList();
   if (Platform.isIOS) {
     showCupertinoDialog(
       context: context,
@@ -78,7 +81,6 @@ void showPlatformLogoutDialog(BuildContext context) {
   }
 }
 
-/// Shows a confirmation dialog before exiting the app.
 Future<bool> showPlatformExitDialog(BuildContext context) async {
   final choice = await (Platform.isIOS
       ? showCupertinoDialog<bool>(
@@ -132,6 +134,29 @@ class _HomeScreenState extends State<HomeScreen> {
   void _onLogoutTap() => showPlatformLogoutDialog(context);
 
   @override
+  void initState() {
+    super.initState();
+    final appData = Provider.of<AppDataProvider>(context, listen: false);
+    appData.startFirebaseListeners();
+  }
+ String _getAppBarTitle(int index, String name, String role) {
+    switch (index) {
+      case 0:
+        return '$name (${role[0].toUpperCase()}${role.substring(1)})'; // Home
+      case 1:
+        return 'Orders';
+      case 2:
+        return 'Sales';
+      case 3:
+        return 'Profile & Settings';
+      default:
+        return '';
+    }
+  }
+
+
+
+  @override
   Widget build(BuildContext context) {
     final appData = Provider.of<AppDataProvider>(context);
     final user = appData.loggedInUser ?? {};
@@ -160,24 +185,34 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       const BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
     ];
-// ignore_for_file: deprecated_member_use
-    return WillPopScope(
-      onWillPop: () => showPlatformExitDialog(context),
+
+    return PopScope(
+      canPop: true,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (!didPop) {
+          final shouldExit = await showPlatformExitDialog(context);
+          if (shouldExit) exit(0);
+        }
+      },
       child: Scaffold(
-        appBar: AppBar(
-          backgroundColor: Colors.deepPurple,
-          title: Text(
-            '$name (${role[0].toUpperCase()}${role.substring(1)})',
-            style: const TextStyle(color: Colors.white),
-          ),
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.logout, color: Colors.red),
-              tooltip: 'Logout',
-              onPressed: _onLogoutTap,
-            ),
-          ],
-        ),
+     appBar: _selectedIndex == 0
+            ? AppBar(
+                backgroundColor: Colors.deepPurple,
+                title: Text(
+                  '$name (${role[0].toUpperCase()}${role.substring(1)})',
+                  style: const TextStyle(color: Colors.white),
+                ),
+                actions: [
+                  IconButton(
+                    icon: const Icon(Icons.logout, color: Colors.red),
+                    tooltip: 'Logout',
+                    onPressed: _onLogoutTap,
+                  ),
+                ],
+              )
+            : null,
+
+
         body: pages[_selectedIndex],
         bottomNavigationBar: BottomNavigationBar(
           currentIndex: _selectedIndex,
@@ -199,189 +234,140 @@ class HomeDashboard extends StatelessWidget {
     final appData = Provider.of<AppDataProvider>(context);
     final user = appData.loggedInUser ?? {};
     final role = user['role']?.toLowerCase() ?? 'employee';
-    final rawAssigned = user['assignedShops'] ?? <dynamic>[];
-    final assignedShops = List<String>.from(rawAssigned);
-    final shops = (role == 'admin' || role == 'manager')
-        ? appData.shops
-        : appData.shops
-              .where((shop) => assignedShops.contains(shop['name']))
-              .toList();
 
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Dashboard Overview',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 12),
-            GridView.count(
-              crossAxisCount: 2,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              mainAxisSpacing: 12,
-              crossAxisSpacing: 12,
-              childAspectRatio: 1.2,
-              children: [
-                SummaryCard(
-                  icon: Icons.shopping_bag,
-                  title: 'Orders',
-                  value: appData.totalOrders.toString(),
-                  color: Colors.deepPurple,
-                ),
-                if (role != 'employee')
-                  SummaryCard(
-                    icon: Icons.trending_up,
-                    title: 'Total Sales',
-                    value: 'Rs. ${appData.totalSales.toStringAsFixed(0)}',
-                    color: Colors.teal,
-                  ),
-                if (role != 'employee')
-                  SummaryCard(
-                    icon: Icons.money,
-                    title: 'Expenses',
-                    value: 'Rs. 0',
-                    color: Colors.green,
-                  ),
-                SummaryCard(
-                  icon: Icons.store,
-                  title: 'Shops',
-                  value: appData.totalShops.toString(),
-                  color: Colors.orange,
-                ),
-                if (role == 'admin' || role == 'manager')
-                  SummaryCard(
-                    icon: Icons.people,
-                    title: 'Employees',
-                    value: appData.totalEmployees.toString(),
-                    color: Colors.blue,
-                  ),
-              ],
-            ),
-            const SizedBox(height: 24),
-            const Text(
-              "Quick Actions",
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 20,
-              runSpacing: 20,
-              children: [
-                QuickActionButton(
-                  icon: Icons.add_shopping_cart,
-                  label: "Add Order",
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => const AddOrderScreen()),
-                    );
-                  },
-                ),
-                QuickActionButton(
-                  icon: Icons.attach_money,
-                  label: "Add Sale",
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => const AddSaleScreen()),
-                    );
-                  },
-                ),
-                if (role == 'admin' || role == 'manager')
-                  QuickActionButton(
-                    icon: Icons.bar_chart,
-                    label: "Reports",
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const ReportsScreen(),
-                        ),
-                      );
-                    },
-                  ),
-                if (role == 'admin')
-                  QuickActionButton(
-                    icon: Icons.add_business,
-                    label: "Add Shop",
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const AddShopScreen(),
-                        ),
-                      );
-                    },
-                  ),
-                if (role == 'admin')
-                  QuickActionButton(
-                    icon: Icons.person_add_alt_1,
-                    label: "Add Employee + Access",
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const AddEmployeeAndAccessScreen(),
-                        ),
-                      );
-                    },
-                  ),
-                if (role == 'admin' || role == 'manager')
-                  QuickActionButton(
-                    icon: Icons.admin_panel_settings,
-                    label: "Manage Orders",
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const OrdersScreen(),
-                        ),
-                      );
-                    },
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance.collection('shops').snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final shops = snapshot.data?.docs ?? [];
+        final activeShops = shops
+            .where((shop) => shop['isDeleted'] != true)
+            .toList();
+
+        final assignedShops = (user['assignedShops'] ?? [])
+            .map<String>((s) => s.toString())
+            .toList();
+
+        final visibleShops = role == 'admin'
+            ? shops.where((doc) => doc['isDeleted'] != true).toList()
+            : shops
+                  .where(
+                    (doc) =>
+                        assignedShops.contains(doc['name']) &&
+                        doc['isDeleted'] != true,
                   )
-                else
-                  QuickActionButton(
-                    icon: Icons.receipt_long,
-                    label: "My Orders",
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const OrdersScreen(),
-                        ),
-                      );
-                    },
-                  ),
-              ],
-            ),
-            const SizedBox(height: 32),
-            const Text(
-              "Shops Overview",
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 12),
-            shops.isEmpty
-                ? Column(
-                    children: [
-                      const Icon(
-                        Icons.store_mall_directory,
-                        size: 64,
-                        color: Colors.grey,
+                  .toList();
+        return SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Dashboard Overview',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 12),
+                GridView.count(
+                  crossAxisCount: 2,
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  mainAxisSpacing: 12,
+                  crossAxisSpacing: 12,
+                  childAspectRatio: 1.2,
+                  children: [
+                    SummaryCard(
+                      icon: Icons.shopping_bag,
+                      title: 'Orders',
+                      value: appData.totalOrders.toString(),
+                      color: Colors.deepPurple,
+                    ),
+                    if (role != 'employee')
+                      SummaryCard(
+                        icon: Icons.trending_up,
+                        title: 'Total Sales',
+                        value: 'Rs. ${appData.totalSales.toStringAsFixed(0)}',
+                        color: Colors.teal,
                       ),
-                      const SizedBox(height: 12),
-                      const Text(
-                        "No shops added yet.",
-                        style: TextStyle(color: Colors.grey),
+                    // if (role != 'employee')
+                    //   SummaryCard(
+                    //     icon: Icons.money,
+                    //     title: 'Expenses',
+                    //     value: 'Rs. 0',
+                    //     color: Colors.green,
+                    //   ),
+                    SummaryCard(
+                      icon: Icons.store,
+                      title: 'Shops',
+                      value: '${activeShops.length}',
+                      color: Colors.orange,
+                    ),
+                    if (role == 'admin' || role == 'manager')
+                      SummaryCard(
+                        icon: Icons.people,
+                        title: 'Employees',
+                        value: appData.totalEmployees.toString(),
+                        color: Colors.blue,
                       ),
-                      const SizedBox(height: 10),
-                      ElevatedButton.icon(
-                        icon: const Icon(Icons.add),
-                        label: const Text("Add Your First Shop"),
-                        onPressed: () {
+                  ],
+                ),
+                const SizedBox(height: 24),
+                const Text(
+                  "Quick Actions",
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 20,
+                  runSpacing: 20,
+                  children: [
+                    if (role == 'employee')
+                    QuickActionButton(
+                      icon: Icons.add_shopping_cart,
+                      label: "Add Order",
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const AddOrderScreen(),
+                          ),
+                        );
+                      },
+                    ),
+                    if (role == 'employee')
+                    QuickActionButton(
+                      icon: Icons.attach_money,
+                      label: "Add Sale",
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const AddSaleScreen(),
+                          ),
+                        );
+                      },
+                    ),
+                    if (role == 'admin' || role == 'manager')
+                      QuickActionButton(
+                        icon: Icons.bar_chart,
+                        label: "Reports",
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const ReportsScreen(),
+                            ),
+                          );
+                        },
+                      ),
+                    if (role == 'admin')
+                      QuickActionButton(
+                        icon: Icons.add_business,
+                        label: "Add Shop",
+                        onTap: () {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
@@ -390,57 +376,121 @@ class HomeDashboard extends StatelessWidget {
                           );
                         },
                       ),
-                    ],
-                  )
-                : Column(
-                    children: [
-                      ListView.builder(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        itemCount: shops.length >= 3 ? 3 : shops.length,
-                        itemBuilder: (_, index) {
-                          final shop = shops[index];
-                          final orderCount = appData.orders
-                              .where((order) => order['shop'] == shop['name'])
-                              .length;
-
-                          return ShopCard(
-                            shopName: shop['name'],
-                            employeeCount: shop['employees']?.length ?? 0,
-                            isOpen: shop['isOpen'],
-                            orderCount: orderCount,
-                            onTap: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) =>
-                                      ShopDetailScreen(shopName: shop['name']),
-                                ),
-                              );
-                            },
+                    if (role == 'admin')
+                      QuickActionButton(
+                        icon: Icons.person_add_alt_1,
+                        label: "Add Employee + Access",
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  const AddEmployeeAndAccessScreen(),
+                            ),
                           );
                         },
                       ),
-                      if (shops.length > 3)
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: TextButton(
+                    QuickActionButton(
+                      icon: Icons.receipt_long,
+                      label: role == 'employee' ? "My Orders" : "Manage Orders",
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const OrdersScreen(),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 32),
+                const Text(
+                  "Shops Overview",
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 12),
+                visibleShops.isEmpty
+                    ? Column(
+                        children: [
+                          const Icon(
+                            Icons.store_mall_directory,
+                            size: 64,
+                            color: Colors.grey,
+                          ),
+                          const SizedBox(height: 12),
+                          const Text(
+                            "No shops added yet.",
+                            style: TextStyle(color: Colors.grey),
+                          ),
+                          const SizedBox(height: 10),
+                          ElevatedButton.icon(
+                            icon: const Icon(Icons.add),
+                            label: const Text("Add Your First Shop"),
                             onPressed: () {
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                  builder: (_) => const AllShopsScreen(),
+                                  builder: (_) => const AddShopScreen(),
                                 ),
                               );
                             },
-                            child: const Text("See All Shops →"),
                           ),
-                        ),
-                    ],
-                  ),
-          ],
-        ),
-      ),
+                        ],
+                      )
+                    : Column(
+                        children: [
+                          ListView.builder(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            itemCount: visibleShops.length >= 3
+                                ? 3
+                                : visibleShops.length,
+                            itemBuilder: (_, index) {
+                              final shop = visibleShops[index];
+                              final shopName = shop['name'] ?? 'Unnamed';
+                              final employees = shop['employees'] ?? [];
+                              return ShopCard(
+                                shopName: shopName,
+                                employeeCount: employees.length,
+                                isOpen: shop['isOpen'] ?? false,
+                                orderCount: appData.orders
+                                    .where((o) => o['shop'] == shopName)
+                                    .length,
+                                onTap: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) =>
+                                          ShopDetailScreen(shopName: shopName),
+                                    ),
+                                  );
+                                },
+                              );
+                            },
+                          ),
+                          if (visibleShops.length > 3)
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: TextButton(
+                                onPressed: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => const AllShopsScreen(),
+                                    ),
+                                  );
+                                },
+                                child: const Text("See All Shops →"),
+                              ),
+                            ),
+                        ],
+                      ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }
