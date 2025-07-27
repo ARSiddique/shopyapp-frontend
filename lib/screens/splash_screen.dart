@@ -45,9 +45,10 @@ class _SplashScreenState extends State<SplashScreen> {
         if (doc.exists) {
           final userData = doc.data()!;
           if (!mounted) return;
-          final appData = Provider.of<AppDataProvider>(context, listen: false);
-          appData.loginUser(userData); // Store user data (with role etc.)
-          await appData.fetchAllData(); // Optional: preload data
+         final appData = Provider.of<AppDataProvider>(context, listen: false);
+          appData.loginUser({...userData, 'id': doc.id}); // Store ID as well
+          await appData.fetchAllData();
+          appData.startFirebaseListeners(); // Optional: preload data
         }
       }
 

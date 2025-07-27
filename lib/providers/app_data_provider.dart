@@ -371,12 +371,35 @@ Future<void> rejectSaleEdit(String firebaseId) async {
 
 
 
-void updateProfile({String? email, String? phone, String? password}) {
-    if (_loggedInUser != null) {
-      if (email != null) _loggedInUser!['email'] = email;
-      if (phone != null) _loggedInUser!['phone'] = phone;
-      if (password != null) _loggedInUser!['password'] = password;
-      notifyListeners();
+Future<void> updateProfile({
+    String? email,
+    String? phone,
+    String? password,
+  }) async {
+    if (_loggedInUser == null) return;
+
+    final updates = <String, dynamic>{};
+    if (email != null) {
+      _loggedInUser!['email'] = email;
+      updates['email'] = email;
+    }
+    if (phone != null) {
+      _loggedInUser!['phone'] = phone;
+      updates['phone'] = phone;
+    }
+    if (password != null) {
+      _loggedInUser!['password'] = password;
+      updates['password'] = password;
+    }
+
+    notifyListeners();
+
+    // ✅ Firestore Update
+    if (_loggedInUser!['id'] != null && updates.isNotEmpty) {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(_loggedInUser!['id']) // this is the doc ID
+          .update(updates);
     }
   }
 

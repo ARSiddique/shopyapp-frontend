@@ -424,6 +424,7 @@ class HomeDashboard extends StatelessWidget {
                             style: TextStyle(color: Colors.grey),
                           ),
                           const SizedBox(height: 10),
+                          if (role == 'admin')
                           ElevatedButton.icon(
                             icon: const Icon(Icons.add),
                             label: const Text("Add Your First Shop"),
