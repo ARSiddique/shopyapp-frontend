@@ -66,10 +66,14 @@ class _LoginScreenState extends State<LoginScreen> {
           final userData = querySnapshot.docs.first.data();
           final role = userData['role'] ?? 'employee';
 
+          // Provider.of<AppDataProvider>(
+          //   context,
+          //   listen: false,
+          // ).loginUser({'email': user.email, 'uid': user.uid, 'role': role});
           Provider.of<AppDataProvider>(
             context,
             listen: false,
-          ).loginUser({'email': user.email, 'uid': user.uid, 'role': role});
+          ).loginUser(userData);
 
           Navigator.pushReplacement(
             context,

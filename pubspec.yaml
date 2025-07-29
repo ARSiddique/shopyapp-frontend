@@ -24,6 +24,7 @@ dependencies:
   path_provider: ^2.1.2
   permission_handler: ^11.3.0
   fl_chart: ^0.66.0
+  data_table_2: ^2.5.7
 
 
 dev_dependencies:

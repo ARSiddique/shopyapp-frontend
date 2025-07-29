@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 import '../providers/app_data_provider.dart';
 
 class AddOrderScreen extends StatefulWidget {
@@ -11,144 +13,144 @@ class AddOrderScreen extends StatefulWidget {
 
 class _AddOrderScreenState extends State<AddOrderScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _itemsController = TextEditingController();
-  final _amountController = TextEditingController();
-  final _notesController = TextEditingController();
-
-  String paymentType = "Cash";
-
- void _submitOrder() async {
-
-    if (_formKey.currentState!.validate()) {
-      final appData = Provider.of<AppDataProvider>(context, listen: false);
-      final user = appData.loggedInUser;
-
-      if (user == null || user['role'] != 'employee') {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Only employees can submit orders")),
-        );
-        return;
-      }
-
-      final String employeeName = user['name'];
-      final String shop = (user['assignedShops'] as List).isNotEmpty
-          ? user['assignedShops'][0]
-          : "Unknown";
-      final int orderId = DateTime.now().millisecondsSinceEpoch;
-
-      final order = {
-        'id': orderId,
-        'employee': employeeName,
-        'shop': shop,
-        'items': _itemsController.text.trim(),
-        'amount': double.tryParse(_amountController.text.trim()) ?? 0,
-        'payment': paymentType,
-        'notes': _notesController.text.trim(),
-      };
-
-     await appData.addOrder(order);
-
-
-     if (!mounted) return; // ✅ Safety check
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Order submitted successfully!")),
-      );
-
-      Navigator.pop(context);
-    }
-  }
+  String? _selectedShop;
+  String _product = '';
+  int _quantity = 1;
+  bool _isSubmitting = false;
 
   @override
   Widget build(BuildContext context) {
     final appData = Provider.of<AppDataProvider>(context);
-    final user = appData.loggedInUser;
-    final employeeName = user?['name'] ?? "Unknown";
-    final assignedShop = user?['assignedShops']?.isNotEmpty == true
-        ? user!['assignedShops'][0]
-        : "Unknown";
+    final user = appData.loggedInUser ?? {};
+    final role = (user['role'] ?? 'employee').toLowerCase();
+
+    final assignedShops = role == 'employee'
+        ? (user['assignedShops'] ?? []).cast<String>()
+        : appData.shops
+              .where((shop) => shop['isDeleted'] != true)
+              .map<String>((s) => s['name'].toString())
+              .toList();
+
+    final isFormValid =
+        _selectedShop != null && _product.trim().isNotEmpty && _quantity > 0;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Submit New Order"),
+        title: const Text('Add Order'),
         backgroundColor: Colors.deepPurple,
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
         child: Form(
           key: _formKey,
           child: Column(
             children: [
-              // Display Info
-              Text("Employee: $employeeName"),
-              Text("Shop: $assignedShop"),
-              
-              const SizedBox(height: 20),
-
-              // Items Ordered
-              TextFormField(
-                controller: _itemsController,
-                decoration: const InputDecoration(labelText: "Items Ordered"),
-                validator: (value) =>
-                    value!.isEmpty ? "Please enter item details" : null,
-              ),
-              const SizedBox(height: 16),
-
-              // Amount
-              TextFormField(
-                controller: _amountController,
-                decoration: const InputDecoration(labelText: "Amount (Rs.)"),
-                keyboardType: TextInputType.number,
-                validator: (value) =>
-                    value!.isEmpty ? "Please enter amount" : null,
-              ),
-              const SizedBox(height: 16),
-
-              // Payment Type
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text("Payment Type"),
-                  Row(
-                    children: [
-                      Radio(
-                        value: "Cash",
-                        groupValue: paymentType,
-                        onChanged: (value) =>
-                            setState(() => paymentType = value!),
-                      ),
-                      const Text("Cash"),
-                      Radio(
-                        value: "Card",
-                        groupValue: paymentType,
-                        onChanged: (value) =>
-                            setState(() => paymentType = value!),
-                      ),
-                      const Text("Card"),
-                    ],
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-
-              // Notes
-              TextFormField(
-                controller: _notesController,
-                maxLines: 3,
+              // Shop Dropdown
+              DropdownButtonFormField<String>(
+                value: _selectedShop,
                 decoration: const InputDecoration(
-                  labelText: "Notes (optional)",
+                  labelText: 'Select Shop',
                   border: OutlineInputBorder(),
                 ),
+                items: assignedShops
+                    .map(
+                      (shop) =>
+                          DropdownMenuItem(value: shop, child: Text(shop)),
+                    )
+                    .toList(),
+                onChanged: (val) => setState(() => _selectedShop = val),
+                validator: (value) =>
+                    value == null ? 'Please select a shop' : null,
               ),
-              const SizedBox(height: 30),
+              const SizedBox(height: 16),
 
-              ElevatedButton.icon(
-                onPressed: _submitOrder,
-                icon: const Icon(Icons.send),
-                label: const Text("Submit Order"),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.deepPurple,
-                  minimumSize: const Size.fromHeight(50),
+              // Product Field
+              TextFormField(
+                decoration: const InputDecoration(
+                  labelText: 'Product',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (val) => setState(() => _product = val),
+                validator: (val) => val == null || val.trim().isEmpty
+                    ? 'Enter product name'
+                    : null,
+              ),
+              const SizedBox(height: 16),
+
+              // Quantity Field
+              TextFormField(
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Quantity',
+                  border: OutlineInputBorder(),
+                ),
+                initialValue: '1',
+                onChanged: (val) {
+                  final parsed = int.tryParse(val);
+                  setState(
+                    () => _quantity = parsed != null && parsed > 0 ? parsed : 1,
+                  );
+                },
+                validator: (val) => (int.tryParse(val ?? '') ?? 0) <= 0
+                    ? 'Invalid quantity'
+                    : null,
+              ),
+              const SizedBox(height: 24),
+
+              // Submit Button
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.save),
+                  label: _isSubmitting
+                      ? const Text('Submitting...')
+                      : const Text('Add Order'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.deepPurple,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  onPressed: isFormValid && !_isSubmitting
+                      ? () async {
+                          if (!_formKey.currentState!.validate()) return;
+                          setState(() => _isSubmitting = true);
+
+                          try {
+                            final newOrder = {
+                              'shop': _selectedShop,
+                              'product': _product.trim(),
+                              'quantity': _quantity,
+                              'employee': user['name'],
+                              'createdAt': Timestamp.now(),
+                            };
+
+                            final docRef = await FirebaseFirestore.instance
+                                .collection('orders')
+                                .add(newOrder);
+
+                            newOrder['id'] = docRef.id;
+                            appData.addOrder(newOrder);
+
+                            if (mounted) {
+                              Navigator.pop(context);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Order added successfully'),
+                                ),
+                              );
+                            }
+                          } catch (e) {
+                            debugPrint('Error adding order: $e');
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Failed to add order'),
+                              ),
+                            );
+                          }
+
+                          if (mounted) setState(() => _isSubmitting = false);
+                        }
+                      : null,
                 ),
               ),
             ],

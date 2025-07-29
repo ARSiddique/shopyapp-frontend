@@ -17,7 +17,8 @@ class SalesScreen extends StatefulWidget {
 class _SalesScreenState extends State<SalesScreen> {
   String _searchQuery = '';
   String _statusFilter = 'All';
-void _showRequestEditDialog(BuildContext context, Map<String, dynamic> sale) {
+
+  void _showRequestEditDialog(BuildContext context, Map<String, dynamic> sale) {
     final TextEditingController amountController = TextEditingController();
     final TextEditingController reasonController = TextEditingController();
 
@@ -90,14 +91,13 @@ void _showRequestEditDialog(BuildContext context, Map<String, dynamic> sale) {
 
     if (!mounted || shouldDelete != true) return;
 
-    // Delete from Firebase
     await FirebaseFirestore.instance.collection('sales').doc(saleId).delete();
     if (!mounted) return;
     Provider.of<AppDataProvider>(context, listen: false).deleteSale(saleId);
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Sale deleted')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Sale deleted')));
   }
 
   void _openEditSaleModal(BuildContext context, Map<String, dynamic> sale) {
@@ -111,24 +111,22 @@ void _showRequestEditDialog(BuildContext context, Map<String, dynamic> sale) {
           updated['total'] = newAmount;
 
           try {
-            
             await FirebaseFirestore.instance
                 .collection('sales')
                 .doc(sale['id'].toString())
                 .update({'total': newAmount});
 
             appData.editSale(updated);
-            
             if (context.mounted) Navigator.pop(context);
 
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Sale updated')),
-            );
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('Sale updated')));
           } catch (e) {
             debugPrint('Error updating sale: $e');
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Update failed')),
-            );
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('Update failed')));
           }
         },
       ),
@@ -146,25 +144,33 @@ void _showRequestEditDialog(BuildContext context, Map<String, dynamic> sale) {
         ? appData.sales.where((s) => s['employee'] == name).toList()
         : appData.sales;
 
-    // Search + Filter
+    // Search & Filter
     mySales = mySales.where((s) {
-      final matchesSearch = s['employee']
-          .toString()
-          .toLowerCase()
-          .contains(_searchQuery.toLowerCase());
+      final matchesSearch = s['employee'].toString().toLowerCase().contains(
+        _searchQuery.toLowerCase(),
+      );
       final matchesFilter =
-          _statusFilter == 'All' || s['status'] == _statusFilter;
+          _statusFilter == 'All' ||
+          (_statusFilter == 'Cash' && (s['cash'] ?? 0) > 0) ||
+          (_statusFilter == 'Card' && (s['card'] ?? 0) > 0) ||
+          (_statusFilter == 'Other' && (s['other'] ?? 0) > 0);
       return matchesSearch && matchesFilter;
     }).toList();
 
     // Summary values
     final totalCount = mySales.length;
     final totalCash = mySales.fold<num>(
-        0, (sum, s) => sum + (s['cash'] is num ? s['cash'] : 0));
+      0,
+      (sum, s) => sum + (s['cash'] is num ? s['cash'] : 0),
+    );
     final totalCard = mySales.fold<num>(
-        0, (sum, s) => sum + (s['card'] is num ? s['card'] : 0));
+      0,
+      (sum, s) => sum + (s['card'] is num ? s['card'] : 0),
+    );
     final totalOther = mySales.fold<num>(
-        0, (sum, s) => sum + (s['other'] is num ? s['other'] : 0));
+      0,
+      (sum, s) => sum + (s['other'] is num ? s['other'] : 0),
+    );
 
     return Scaffold(
       appBar: AppBar(
@@ -178,9 +184,11 @@ void _showRequestEditDialog(BuildContext context, Map<String, dynamic> sale) {
         children: [
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: Wrap(
-              spacing: 12,
-              runSpacing: 12,
+            child: GridView.count(
+              shrinkWrap: true,
+              crossAxisCount: 2,
+              childAspectRatio: 1.4,
+              physics: const NeverScrollableScrollPhysics(),
               children: [
                 SummaryCard(
                   icon: Icons.attach_money,
@@ -213,10 +221,9 @@ void _showRequestEditDialog(BuildContext context, Map<String, dynamic> sale) {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: SearchAndFilterBar(
               onSearchChanged: (query) => setState(() => _searchQuery = query),
-              filterOptions: const ['All', 'Pending', 'Forwarded', 'Received'],
+              filterOptions: const ['All', 'Cash', 'Card', 'Other'],
               selectedFilter: _statusFilter,
-              onFilterChanged: (value) =>
-                  setState(() => _statusFilter = value),
+              onFilterChanged: (value) => setState(() => _statusFilter = value),
             ),
           ),
           const Divider(),
@@ -229,10 +236,18 @@ void _showRequestEditDialog(BuildContext context, Map<String, dynamic> sale) {
                     separatorBuilder: (_, __) => const SizedBox(height: 12),
                     itemBuilder: (_, index) {
                       final sale = mySales[index];
-                      final createdAt = sale['createdAt'];
-                      final displayTime = createdAt is Timestamp
-                          ? createdAt.toDate()
-                          : DateTime.tryParse(createdAt.toString());
+                     final dynamic createdAt = sale['createdAt'];
+                      DateTime? displayTime;
+
+                      if (createdAt is Timestamp) {
+                        displayTime = createdAt.toDate();
+                      } else if (createdAt is DateTime) {
+                        displayTime = createdAt;
+                      } else if (createdAt is String) {
+                        displayTime = DateTime.tryParse(createdAt);
+                      } else {
+                        displayTime = null;
+                      }
                       final formatted = displayTime != null
                           ? DateFormat('dd MMM, hh:mm a').format(displayTime)
                           : 'N/A';
@@ -241,8 +256,9 @@ void _showRequestEditDialog(BuildContext context, Map<String, dynamic> sale) {
                         child: ListTile(
                           title: Text('💵 Rs. ${sale['total']}'),
                           subtitle: Text(
-                              '🧍 ${sale['employee']} - 🕒 $formatted'),
-                         trailing: Row(
+                            '🧍 ${sale['employee']} - 🕒 $formatted',
+                          ),
+                          trailing: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               IconButton(
@@ -272,7 +288,6 @@ void _showRequestEditDialog(BuildContext context, Map<String, dynamic> sale) {
                                 ),
                             ],
                           ),
-
                         ),
                       );
                     },

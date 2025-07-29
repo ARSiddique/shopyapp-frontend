@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-
 class AppDataProvider extends ChangeNotifier {
-  
   Map<String, dynamic>? _loggedInUser;
   final List<Map<String, dynamic>> _orders = [];
   final List<Map<String, dynamic>> _sales = [];
@@ -18,21 +16,30 @@ class AppDataProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  bool loginWithNameAndCode(String name, String code) {
-    if (name.isEmpty || code.isEmpty || employees.isEmpty) return false;
+  Future<bool> loginWithNameAndCode(String name, String code) async {
+    if (name.isEmpty || code.isEmpty) return false;
 
-    final matched = employees.firstWhere(
-      (e) =>
-          e['name'].toString().toLowerCase() == name.toLowerCase() &&
-          e['loginCode'] == code,
-      orElse: () => {},
-    );
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .where('name', isEqualTo: name)
+          .where('loginCode', isEqualTo: code)
+          .limit(1)
+          .get();
 
-    if (matched.isNotEmpty) {
-      _loggedInUser = matched;
-      notifyListeners();
-      return true;
+      if (snapshot.docs.isNotEmpty) {
+        _loggedInUser = snapshot.docs.first.data();
+        notifyListeners();
+
+        // Debug log
+        print("LOGIN ROLE: ${_loggedInUser?['role']}");
+        print("LOGIN Assigned Shops: ${_loggedInUser?['assignedShops']}");
+        return true;
+      }
+    } catch (e) {
+      print('Login error: $e');
     }
+
     return false;
   }
 
@@ -93,7 +100,7 @@ class AppDataProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-Future<void> requestSaleEdit(
+  Future<void> requestSaleEdit(
     int saleId,
     String reason,
     double newAmount,
@@ -134,7 +141,6 @@ Future<void> requestSaleEdit(
     }
   }
 
-
   void assignAccess(String shopName, String employeeName) {
     final shopIndex = shops.indexWhere((shop) => shop['name'] == shopName);
     if (shopIndex != -1) {
@@ -166,7 +172,7 @@ Future<void> requestSaleEdit(
   //     }
   //   }
 
- Future<void> deleteShopByName(String name) async {
+  Future<void> deleteShopByName(String name) async {
     try {
       final shopDoc = await FirebaseFirestore.instance
           .collection('shops')
@@ -205,10 +211,10 @@ Future<void> requestSaleEdit(
   // ---------------------------
   // List<Map<String, dynamic>> get orders => [..._orders];
 
- Future<void> addOrder(Map<String, dynamic> order) async {
+  Future<void> addOrder(Map<String, dynamic> order) async {
     try {
       order['status'] = 'Pending';
-      order['createdAt'] = DateTime.now();
+      order['createdAt'] = Timestamp.now();
       order['canRequestEdit'] = true;
 
       await FirebaseFirestore.instance
@@ -222,7 +228,6 @@ Future<void> requestSaleEdit(
       debugPrint('Error adding order: $e');
     }
   }
-
 
   void forwardOrder(int id) {
     final index = _orders.indexWhere((order) => order['id'] == id);
@@ -268,7 +273,6 @@ Future<void> requestSaleEdit(
     }
   }
 
-
   bool canEditOrder(Map<String, dynamic> order) {
     final createdAt = order['createdAt'] as DateTime?;
     if (createdAt == null) return false;
@@ -291,15 +295,26 @@ Future<void> requestSaleEdit(
   List<Map<String, dynamic>> get sales {
     final now = DateTime.now();
     return _sales.where((s) {
-      final createdAt = s['createdAt'] as DateTime?;
+      final rawCreatedAt = s['createdAt'];
+      DateTime? createdAt;
+
+      if (rawCreatedAt is DateTime) {
+        createdAt = rawCreatedAt;
+      } else if (rawCreatedAt is Timestamp) {
+        createdAt = rawCreatedAt.toDate();
+      } else if (rawCreatedAt is String) {
+        createdAt = DateTime.tryParse(rawCreatedAt);
+      }
+
       final isRecent =
           createdAt != null && now.difference(createdAt).inMinutes < 5;
       final isOwner = s['addedBy'] == _loggedInUser?['name'];
       return isOwner && isRecent;
     }).toList();
   }
-  
- Future<void> addSale(Map<String, dynamic> saleData) async {
+
+  Future<void> addSale(Map<String, dynamic> saleData) async {
+    saleData['createdAt'] = Timestamp.now();
     if (saleData.isNotEmpty && saleData['total'] != null) {
       try {
         final docRef = await FirebaseFirestore.instance
@@ -314,9 +329,6 @@ Future<void> requestSaleEdit(
     }
   }
 
-
-
-/// Returns only the sale‑type edit requests
   List<Map<String, dynamic>> get salesEditRequests =>
       _editRequests.where((r) => r['type'] == 'sale').toList();
 
@@ -351,11 +363,8 @@ Future<void> requestSaleEdit(
     }
   }
 
-
-
-
   /// Reject a sale‑edit request (just removes it)
-Future<void> rejectSaleEdit(String firebaseId) async {
+  Future<void> rejectSaleEdit(String firebaseId) async {
     try {
       await FirebaseFirestore.instance
           .collection('editRequests')
@@ -369,9 +378,7 @@ Future<void> rejectSaleEdit(String firebaseId) async {
     }
   }
 
-
-
-Future<void> updateProfile({
+  Future<void> updateProfile({
     String? email,
     String? phone,
     String? password,
@@ -403,7 +410,6 @@ Future<void> updateProfile({
     }
   }
 
-
   void editSale(Map<String, dynamic> updatedSale) {
     final index = _sales.indexWhere((s) => s['id'] == updatedSale['id']);
     if (index != -1) {
@@ -412,13 +418,11 @@ Future<void> updateProfile({
     }
   }
 
- Future<void> deleteSale(String id) async {
+  Future<void> deleteSale(String id) async {
     _sales.removeWhere((s) => s['id'] == id);
     notifyListeners();
     await FirebaseFirestore.instance.collection('sales').doc(id).delete();
   }
-
-
 
   List<Map<String, dynamic>> getEmployeeSales(String employeeName) {
     final now = DateTime.now();
@@ -437,7 +441,8 @@ Future<void> updateProfile({
   // ---------------------------
   int get totalOrders => _orders.length;
   double get totalSales =>
-      _sales.fold(0.0, (sumValue, s) => sumValue + (s['amount'] ?? 0.0));
+      _sales.fold(0.0, (sumValue, s) => sumValue + (s['total'] ?? 0.0));
+
   int get totalShops => shops.length;
   int get totalEmployees => employees.length;
 
@@ -449,11 +454,14 @@ Future<void> updateProfile({
 
   List<Map<String, dynamic>> get receivedOrders =>
       _orders.where((o) => o['status'] == 'Received').toList();
-List<Map<String, dynamic>> getFilteredSales(String filter) {
+  List<Map<String, dynamic>> getFilteredSales(String filter) {
     final now = DateTime.now();
 
     return sales.where((sale) {
-      final date = sale['createdAt']?.toDate() ?? now;
+     final raw = sale['date'] ?? sale['createdAt'];
+      final date = raw is Timestamp
+          ? raw.toDate()
+          : (raw is DateTime ? raw : now);
 
       if (filter == 'Daily') {
         return date.year == now.year &&
@@ -488,7 +496,7 @@ List<Map<String, dynamic>> getFilteredSales(String filter) {
     };
   }
 
-Future<void> approveEditRequest(String requestId) async {
+  Future<void> approveEditRequest(String requestId) async {
     try {
       await FirebaseFirestore.instance
           .collection('editRequests')
@@ -517,6 +525,7 @@ Future<void> approveEditRequest(String requestId) async {
       debugPrint('Error rejecting edit request: $e');
     }
   }
+
   Future<void> fetchUsers() async {
     try {
       final snapshot = await FirebaseFirestore.instance
@@ -529,7 +538,7 @@ Future<void> approveEditRequest(String requestId) async {
     }
   }
 
- Future<void> fetchShops() async {
+  Future<void> fetchShops() async {
     final snapshot = await FirebaseFirestore.instance.collection('shops').get();
     shops = snapshot.docs
         .map((doc) => doc.data())
@@ -537,19 +546,20 @@ Future<void> approveEditRequest(String requestId) async {
         .toList();
     notifyListeners();
   }
-Future<void> fetchOrders() async {
+
+  Future<void> fetchOrders() async {
     try {
       final snapshot = await FirebaseFirestore.instance
           .collection('orders')
           .get();
-     _orders.clear();
+      _orders.clear();
       _orders.addAll(snapshot.docs.map((doc) => doc.data()));
-
     } catch (e) {
       debugPrint('Error fetching orders: $e');
     }
   }
-Future<void> fetchSales() async {
+
+ Future<void> fetchSales() async {
     try {
       final snapshot = await FirebaseFirestore.instance
           .collection('sales')
@@ -559,11 +569,18 @@ Future<void> fetchSales() async {
       _sales.addAll(
         snapshot.docs.map((doc) {
           final data = doc.data();
-          return {
-            'id': doc.id,
-            ...data,
-            'createdAt': (data['createdAt'] as Timestamp).toDate(),
-          };
+          final rawCreatedAt = data['createdAt'];
+          DateTime? createdAt;
+
+          if (rawCreatedAt is Timestamp) {
+            createdAt = rawCreatedAt.toDate();
+          } else if (rawCreatedAt is DateTime) {
+            createdAt = rawCreatedAt;
+          } else if (rawCreatedAt is String) {
+            createdAt = DateTime.tryParse(rawCreatedAt);
+          }
+
+          return {'id': doc.id, ...data, 'createdAt': createdAt};
         }),
       );
       notifyListeners();
@@ -572,7 +589,7 @@ Future<void> fetchSales() async {
     }
   }
 
-Future<void> fetchEditRequests() async {
+  Future<void> fetchEditRequests() async {
     try {
       final snapshot = await FirebaseFirestore.instance
           .collection('editRequests')
@@ -586,7 +603,6 @@ Future<void> fetchEditRequests() async {
     }
   }
 
-
   Future<void> fetchAllData() async {
     await fetchUsers();
     await fetchShops();
@@ -596,7 +612,7 @@ Future<void> fetchEditRequests() async {
     notifyListeners();
   }
 
-      void startFirebaseListeners() {
+  void startFirebaseListeners() {
     FirebaseFirestore.instance.collection('shops').snapshots().listen((
       snapshot,
     ) {
@@ -623,7 +639,25 @@ Future<void> fetchEditRequests() async {
       snapshot,
     ) {
       _sales.clear();
-      _sales.addAll(snapshot.docs.map((doc) => doc.data()));
+      _sales.addAll(
+        snapshot.docs.map((doc) {
+          final data = doc.data();
+          final rawCreatedAt = data['createdAt'];
+          DateTime? createdAt;
+
+          if (rawCreatedAt is Timestamp) {
+            createdAt = rawCreatedAt.toDate();
+          } else if (rawCreatedAt is DateTime) {
+            createdAt = rawCreatedAt;
+          } else if (rawCreatedAt is String) {
+            createdAt = DateTime.tryParse(rawCreatedAt);
+          } else {
+            createdAt = null;
+          }
+
+          return {'id': doc.id, ...data, 'createdAt': createdAt};
+        }),
+      );
       notifyListeners();
     });
 

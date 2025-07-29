@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_data_provider.dart';
 import '../screens/login_screen.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class AddSaleScreen extends StatefulWidget {
   const AddSaleScreen({super.key});
@@ -40,7 +41,11 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
 
     if (sales.isNotEmpty) {
       final recentSale = sales.last;
-      final createdAt = recentSale['createdAt'] as DateTime;
+      final createdAtRaw = recentSale['createdAt'];
+      final createdAt = createdAtRaw is Timestamp
+          ? createdAtRaw.toDate()
+          : (createdAtRaw is DateTime ? createdAtRaw : DateTime.now());
+
       final elapsed = DateTime.now().difference(createdAt);
 
       if (elapsed.inMinutes < 5) {
@@ -85,16 +90,19 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
       );
       return;
     }
-
-    final sale = {
-      'id': DateTime.now().millisecondsSinceEpoch.toString(),
+final now = DateTime.now();
+   final sale = {
+      'id': now.millisecondsSinceEpoch.toString(),
       'employee': user['name'],
       'shop': user['assignedShops']?[0] ?? '',
       'cash': cash,
       'card': card,
       'other': other,
       'total': total,
-      'createdAt': DateTime.now(),
+      'createdAt': now,
+      'date': Timestamp.fromDate(
+        DateTime(now.year, now.month, now.day),
+      ), // ✅ Added!
     };
 
     appData.addSale(sale);

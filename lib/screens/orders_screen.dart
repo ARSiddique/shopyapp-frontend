@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'dart:io' show Platform;
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_data_provider.dart';
@@ -8,18 +6,16 @@ import '../widgets/edit_order_modal.dart';
 import '../widgets/summary_card.dart';
 import '../widgets/search_and_filter_bar.dart';
 
-
 class OrdersScreen extends StatefulWidget {
   const OrdersScreen({super.key});
 
   @override
   State<OrdersScreen> createState() => _OrdersScreenState();
-
 }
 
 class _OrdersScreenState extends State<OrdersScreen> {
   Timer? _timer;
-   String _searchQuery = '';
+  String _searchQuery = '';
   String _statusFilter = 'All';
 
   @override
@@ -44,72 +40,23 @@ class _OrdersScreenState extends State<OrdersScreen> {
         content: const Text('This action cannot be undone.'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
+            onPressed: () => Navigator.pop(context),
             child: const Text('Cancel'),
           ),
           TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
+            onPressed: () => Navigator.pop(context, true),
             child: const Text('Delete'),
           ),
         ],
       ),
     );
-    if (should == true) {
-      if (!mounted) return;
+    if (should == true && mounted) {
       Provider.of<AppDataProvider>(context, listen: false).deleteOrder(orderId);
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('Order deleted')));
     }
   }
-
-  // void _showLogoutDialog() {
-  //   final appData = Provider.of<AppDataProvider>(context, listen: false);
-  //   if (Platform.isIOS) {
-  //     showCupertinoDialog(
-  //       context: context,
-  //       builder: (_) => CupertinoAlertDialog(
-  //         title: const Text('Logout?'),
-  //         content: const Text('Are you sure you want to logout?'),
-  //         actions: [
-  //           CupertinoDialogAction(
-  //             child: const Text('Cancel'),
-  //             onPressed: () => Navigator.of(context).pop(),
-  //           ),
-  //           CupertinoDialogAction(
-  //             isDestructiveAction: true,
-  //             child: const Text('Logout'),
-  //             onPressed: () {
-  //               Navigator.of(context).pop();
-  //               appData.logout();
-  //             },
-  //           ),
-  //         ],
-  //       ),
-  //     );
-  //   } else {
-  //     showDialog(
-  //       context: context,
-  //       builder: (_) => AlertDialog(
-  //         title: const Text('Logout'),
-  //         content: const Text('Are you sure you want to logout?'),
-  //         actions: [
-  //           TextButton(
-  //             child: const Text('Cancel'),
-  //             onPressed: () => Navigator.of(context).pop(),
-  //           ),
-  //           TextButton(
-  //             child: const Text('Logout'),
-  //             onPressed: () {
-  //               Navigator.of(context).pop();
-  //               appData.logout();
-  //             },
-  //           ),
-  //         ],
-  //       ),
-  //     );
-  //   }
-  // }
 
   String _formatCountdown(int seconds) {
     final m = (seconds ~/ 60).toString().padLeft(2, '0');
@@ -125,18 +72,17 @@ class _OrdersScreenState extends State<OrdersScreen> {
     final name = user['name']?.toString() ?? '';
 
     List<Map<String, dynamic>> myOrders = role == 'employee'
-    ? appData.orders.where((o) => o['employee'] == name).toList()
-    : appData.orders;
+        ? appData.orders.where((o) => o['employee'] == name).toList()
+        : appData.orders;
 
-myOrders = myOrders.where((o) {
-  final matchesSearch = o['items']
-      .toString()
-      .toLowerCase()
-      .contains(_searchQuery.toLowerCase());
-  final matchesFilter =
-      _statusFilter == 'All' || o['status'] == _statusFilter;
-  return matchesSearch && matchesFilter;
-}).toList();
+    myOrders = myOrders.where((o) {
+      final matchesSearch = o['items'].toString().toLowerCase().contains(
+        _searchQuery.toLowerCase(),
+      );
+      final matchesFilter =
+          _statusFilter == 'All' || o['status'] == _statusFilter;
+      return matchesSearch && matchesFilter;
+    }).toList();
 
     return Scaffold(
       appBar: AppBar(
@@ -151,70 +97,85 @@ myOrders = myOrders.where((o) {
         ),
         // actions: [
         //   IconButton(
-        //     icon: const Icon(Icons.logout, color: Colors.red),
-        //     onPressed: _showLogoutDialog,
+        //     icon: const Icon(Icons.logout, color: Colors.white),
+        //     onPressed: () => appData.logout(context),
         //   ),
         // ],
       ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: Wrap(
-              spacing: 12,
-              runSpacing: 12,
+      body: GestureDetector(
+        onTap: () => FocusScope.of(context).unfocus(),
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                SummaryCard(
-                  title: 'Total',
-                  count: appData.orders.length.toString(),
-                  color: Colors.deepPurple,
-                  icon: Icons.receipt_long,
+                // Summary Cards in GridView
+                GridView.count(
+                  shrinkWrap: true,
+                  crossAxisCount: 2,
+                  childAspectRatio: 1.4,
+                  physics: const NeverScrollableScrollPhysics(),
+                  children: [
+                    SummaryCard(
+                      title: 'Total',
+                      count: appData.orders.length.toString(),
+                      color: Colors.deepPurple,
+                      icon: Icons.receipt_long,
+                    ),
+                    SummaryCard(
+                      title: 'Pending',
+                      count: appData.orders
+                          .where((o) => o['status'] == 'Pending')
+                          .length
+                          .toString(),
+                      color: Colors.orange,
+                      icon: Icons.hourglass_empty,
+                    ),
+                    SummaryCard(
+                      title: 'Forwarded',
+                      count: appData.orders
+                          .where((o) => o['status'] == 'Forwarded')
+                          .length
+                          .toString(),
+                      color: Colors.blue,
+                      icon: Icons.send,
+                    ),
+                    SummaryCard(
+                      title: 'Received',
+                      count: appData.orders
+                          .where((o) => o['status'] == 'Received')
+                          .length
+                          .toString(),
+                      color: Colors.green,
+                      icon: Icons.check_circle,
+                    ),
+                  ],
                 ),
-                SummaryCard(
-                  title: 'Pending',
-                  count: appData.orders
-                      .where((o) => o['status'] == 'Pending')
-                      .length
-                      .toString(),
-                  color: Colors.orange,
-                  icon: Icons.hourglass_empty,
+                const SizedBox(height: 16),
+                SearchAndFilterBar(
+                  onSearchChanged: (query) =>
+                      setState(() => _searchQuery = query),
+                  filterOptions: const [
+                    'All',
+                    'Pending',
+                    'Forwarded',
+                    'Received',
+                  ],
+                  selectedFilter: _statusFilter,
+                  onFilterChanged: (value) =>
+                      setState(() => _statusFilter = value),
                 ),
-                SummaryCard(
-                  title: 'Forwarded',
-                  count: appData.orders
-                      .where((o) => o['status'] == 'Forwarded')
-                      .length
-                      .toString(),
-                  color: Colors.blue,
-                  icon: Icons.send,
-                ),
-                SummaryCard(
-                  title: 'Received',
-                  count: appData.orders
-                      .where((o) => o['status'] == 'Received')
-                      .length
-                      .toString(),
-                  color: Colors.green,
-                  icon: Icons.check_circle,
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: SearchAndFilterBar(
-              onSearchChanged: (query) => setState(() => _searchQuery = query),
-              filterOptions: const ['All', 'Pending', 'Forwarded', 'Received'],
-              selectedFilter: _statusFilter,
-              onFilterChanged: (value) => setState(() => _statusFilter = value),
-            ),
-          ),
-          const Divider(),
-          Expanded(
-            child: myOrders.isEmpty
-                ? const Center(child: Text('No orders available'))
-                : ListView.separated(
-                    padding: const EdgeInsets.all(16),
+                const SizedBox(height: 16),
+                if (myOrders.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(32.0),
+                    child: Center(child: Text('No orders available')),
+                  )
+                else
+                  ListView.separated(
+                    physics: const NeverScrollableScrollPhysics(),
+                    shrinkWrap: true,
                     itemCount: myOrders.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 12),
                     itemBuilder: (_, index) {
@@ -285,15 +246,17 @@ myOrders = myOrders.where((o) {
                                         );
                                       },
                                     ),
-                                  ElevatedButton.icon(
-                                    icon: const Icon(Icons.delete),
-                                    label: const Text('Delete'),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: Colors.red,
+                                  if (order['employee'] == name)
+                                    ElevatedButton.icon(
+                                      icon: const Icon(Icons.delete),
+                                      label: const Text('Delete'),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.red,
+                                      ),
+                                      onPressed: () => _confirmDelete(
+                                        order['id'].toString(),
+                                      ),
                                     ),
-                                    onPressed: () =>
-                                        _confirmDelete(order['id'].toString()),
-                                  ),
                                   if ((role == 'manager' || role == 'admin') &&
                                       order['status'] != 'Received')
                                     ElevatedButton.icon(
@@ -325,10 +288,11 @@ myOrders = myOrders.where((o) {
                       );
                     },
                   ),
+              ],
+            ),
           ),
-        ],
+        ),
       ),
     );
   }
-  
 }

@@ -139,22 +139,20 @@ class _HomeScreenState extends State<HomeScreen> {
     final appData = Provider.of<AppDataProvider>(context, listen: false);
     appData.startFirebaseListeners();
   }
- String _getAppBarTitle(int index, String name, String role) {
-    switch (index) {
-      case 0:
-        return '$name (${role[0].toUpperCase()}${role.substring(1)})'; // Home
-      case 1:
-        return 'Orders';
-      case 2:
-        return 'Sales';
-      case 3:
-        return 'Profile & Settings';
-      default:
-        return '';
-    }
-  }
-
-
+  //  String _getAppBarTitle(int index, String name, String role) {
+  //     switch (index) {
+  //       case 0:
+  //         return '$name (${role[0].toUpperCase()}${role.substring(1)})'; // Home
+  //       case 1:
+  //         return 'Orders';
+  //       case 2:
+  //         return 'Sales';
+  //       case 3:
+  //         return 'Profile & Settings';
+  //       default:
+  //         return '';
+  //     }
+  //   }
 
   @override
   Widget build(BuildContext context) {
@@ -195,7 +193,7 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       },
       child: Scaffold(
-     appBar: _selectedIndex == 0
+        appBar: _selectedIndex == 0
             ? AppBar(
                 backgroundColor: Colors.deepPurple,
                 title: Text(
@@ -211,7 +209,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 ],
               )
             : null,
-
 
         body: pages[_selectedIndex],
         bottomNavigationBar: BottomNavigationBar(
@@ -251,15 +248,21 @@ class HomeDashboard extends StatelessWidget {
             .map<String>((s) => s.toString())
             .toList();
 
-        final visibleShops = role == 'admin'
+     ('ROLE: $role');
+        debugPrint('Assigned Shops: $assignedShops');
+        for (var doc in shops) {
+          debugPrint('Shop: ${doc['name']}');
+        }
+
+       final visibleShops = (role == 'admin' || role == 'manager')
             ? shops.where((doc) => doc['isDeleted'] != true).toList()
-            : shops
-                  .where(
-                    (doc) =>
-                        assignedShops.contains(doc['name']) &&
-                        doc['isDeleted'] != true,
-                  )
-                  .toList();
+            : shops.where((doc) {
+                final shopName = doc['name']?.toString().trim().toLowerCase();
+                return assignedShops
+                        .map((s) => s.trim().toLowerCase())
+                        .contains(shopName) &&
+                    doc['isDeleted'] != true;
+              }).toList();
         return SafeArea(
           child: SingleChildScrollView(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
@@ -325,31 +328,31 @@ class HomeDashboard extends StatelessWidget {
                   runSpacing: 20,
                   children: [
                     if (role == 'employee')
-                    QuickActionButton(
-                      icon: Icons.add_shopping_cart,
-                      label: "Add Order",
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const AddOrderScreen(),
-                          ),
-                        );
-                      },
-                    ),
+                      QuickActionButton(
+                        icon: Icons.add_shopping_cart,
+                        label: "Add Order",
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const AddOrderScreen(),
+                            ),
+                          );
+                        },
+                      ),
                     if (role == 'employee')
-                    QuickActionButton(
-                      icon: Icons.attach_money,
-                      label: "Add Sale",
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const AddSaleScreen(),
-                          ),
-                        );
-                      },
-                    ),
+                      QuickActionButton(
+                        icon: Icons.attach_money,
+                        label: "Add Sale",
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const AddSaleScreen(),
+                            ),
+                          );
+                        },
+                      ),
                     if (role == 'admin' || role == 'manager')
                       QuickActionButton(
                         icon: Icons.bar_chart,
@@ -425,18 +428,18 @@ class HomeDashboard extends StatelessWidget {
                           ),
                           const SizedBox(height: 10),
                           if (role == 'admin')
-                          ElevatedButton.icon(
-                            icon: const Icon(Icons.add),
-                            label: const Text("Add Your First Shop"),
-                            onPressed: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => const AddShopScreen(),
-                                ),
-                              );
-                            },
-                          ),
+                            ElevatedButton.icon(
+                              icon: const Icon(Icons.add),
+                              label: const Text("Add Your First Shop"),
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => const AddShopScreen(),
+                                  ),
+                                );
+                              },
+                            ),
                         ],
                       )
                     : Column(
