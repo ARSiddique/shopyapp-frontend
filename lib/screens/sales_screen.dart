@@ -1,11 +1,13 @@
+import 'dart:io';
+import 'package:csv/csv.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import '../providers/app_data_provider.dart';
-import '../widgets/summary_card.dart';
-import '../widgets/search_and_filter_bar.dart';
-import '../widgets/edit_sale_modal.dart';
+import 'add_sale_screen.dart';
 
 class SalesScreen extends StatefulWidget {
   const SalesScreen({super.key});
@@ -15,286 +17,257 @@ class SalesScreen extends StatefulWidget {
 }
 
 class _SalesScreenState extends State<SalesScreen> {
-  String _searchQuery = '';
-  String _statusFilter = 'All';
+  bool _mounted = false;
 
-  void _showRequestEditDialog(BuildContext context, Map<String, dynamic> sale) {
-    final TextEditingController amountController = TextEditingController();
-    final TextEditingController reasonController = TextEditingController();
-
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Request Sale Edit'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: amountController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'New Amount'),
-            ),
-            TextField(
-              controller: reasonController,
-              decoration: const InputDecoration(labelText: 'Reason'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              final newAmount =
-                  double.tryParse(amountController.text.trim()) ?? 0.0;
-              final reason = reasonController.text.trim();
-
-              if (newAmount > 0 && reason.isNotEmpty) {
-                Provider.of<AppDataProvider>(
-                  context,
-                  listen: false,
-                ).requestSaleEdit(sale['id'], reason, newAmount);
-
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Edit request sent')),
-                );
-              }
-            },
-            child: const Text('Submit'),
-          ),
-        ],
-      ),
-    );
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _mounted = true;
+    Provider.of<AppDataProvider>(context, listen: false).fetchSales();
   }
 
-  void _confirmDelete(String saleId) async {
-    final shouldDelete = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Delete Sale?'),
-        content: const Text('This action cannot be undone.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
+  Future<Directory?> _getDownloadDirectory() async {
+    if (Platform.isAndroid) {
+      if (await Permission.manageExternalStorage.request().isGranted ||
+          await Permission.storage.request().isGranted) {
+        final directory = Directory('/storage/emulated/0/Download');
+        if (await directory.exists()) {
+          return directory;
+        } else {
+          return await getExternalStorageDirectory(); // fallback
+        }
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Storage permission denied')),
+        );
+        return null;
+      }
+    } else {
+      return await getApplicationDocumentsDirectory(); // for iOS or other
+    }
+  }
 
-    if (!mounted || shouldDelete != true) return;
+  Future<void> exportCSV(List<Map<String, dynamic>> sales) async {
+    final csvData = [
+      [
+        'Date',
+        'Time',
+        'Shop',
+        'Cash',
+        'Card',
+        'Other',
+        'Total',
+        'Submitted By',
+      ],
+      ...sales.map((sale) {
+        final dt = sale['createdAt'] ?? DateTime.now();
+        return [
+          DateFormat('yyyy-MM-dd').format(dt),
+          DateFormat('hh:mm a').format(dt),
+          sale['shop'] ?? '',
+          (sale['cash'] ?? 0).toString(),
+          (sale['card'] ?? 0).toString(),
+          (sale['other'] ?? 0).toString(),
+          (sale['total'] ?? 0).toString(),
+          sale['employee'] ?? '',
+        ];
+      }),
+    ];
 
-    await FirebaseFirestore.instance.collection('sales').doc(saleId).delete();
-    if (!mounted) return;
-    Provider.of<AppDataProvider>(context, listen: false).deleteSale(saleId);
-
+    final csv = const ListToCsvConverter().convert(csvData);
+    final directory = await _getDownloadDirectory();
+    if (directory == null) return;
+    final path = '${directory.path}/sales_report.csv';
+    final file = File(path);
+    await file.writeAsString(csv);
+    if (!_mounted || !context.mounted) return;
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(const SnackBar(content: Text('Sale deleted')));
+    ).showSnackBar(SnackBar(content: Text('CSV exported to: $path')));
   }
 
-  void _openEditSaleModal(BuildContext context, Map<String, dynamic> sale) {
-    showDialog(
-      context: context,
-      builder: (_) => EditSaleModal(
-        initialAmount: (sale['total'] ?? 0).toDouble(),
-        onSubmit: (newAmount) async {
-          final appData = Provider.of<AppDataProvider>(context, listen: false);
-          final updated = Map<String, dynamic>.from(sale);
-          updated['total'] = newAmount;
+  Future<void> exportPDF(List<Map<String, dynamic>> sales) async {
+    final pdf = pw.Document();
+    final headers = [
+      'Date',
+      'Time',
+      'Shop',
+      'Cash',
+      'Card',
+      'Other',
+      'Total',
+      'Submitted By',
+    ];
 
-          try {
-            await FirebaseFirestore.instance
-                .collection('sales')
-                .doc(sale['id'].toString())
-                .update({'total': newAmount});
-
-            appData.editSale(updated);
-            if (context.mounted) Navigator.pop(context);
-
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(const SnackBar(content: Text('Sale updated')));
-          } catch (e) {
-            debugPrint('Error updating sale: $e');
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(const SnackBar(content: Text('Update failed')));
-          }
+    pdf.addPage(
+      pw.Page(
+        build: (context) {
+          return pw.TableHelper.fromTextArray(
+            headers: headers,
+            data: sales.map((sale) {
+              final dt = sale['createdAt'] ?? DateTime.now();
+              return [
+                DateFormat('yyyy-MM-dd').format(dt),
+                DateFormat('hh:mm a').format(dt),
+                sale['shop'] ?? '',
+                (sale['cash'] ?? 0).toString(),
+                (sale['card'] ?? 0).toString(),
+                (sale['other'] ?? 0).toString(),
+                (sale['total'] ?? 0).toString(),
+                sale['employee'] ?? '',
+              ];
+            }).toList(),
+          );
         },
       ),
     );
+
+    final directory = await _getDownloadDirectory();
+    if (directory == null) return;
+    final file = File('${directory.path}/sales_report.pdf');
+    await file.writeAsBytes(await pdf.save());
+    if (!_mounted || !context.mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('PDF exported to: ${file.path}')));
   }
 
   @override
   Widget build(BuildContext context) {
     final appData = Provider.of<AppDataProvider>(context);
     final user = appData.loggedInUser ?? {};
-    final role = (user['role'] ?? '').toString().toLowerCase();
-    final name = user['name']?.toString() ?? '';
+    final role = user['role'] ?? 'employee';
+    final isEmployee = role == 'employee';
 
-    List<Map<String, dynamic>> mySales = role == 'employee'
-        ? appData.sales.where((s) => s['employee'] == name).toList()
-        : appData.sales;
+    if (isEmployee) {
+      Future.delayed(Duration.zero, () {
+        if (!_mounted || !context.mounted) return;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const AddSaleScreen()),
+        );
+      });
+      return const SizedBox();
+    }
 
-    // Search & Filter
-    mySales = mySales.where((s) {
-      final matchesSearch = s['employee'].toString().toLowerCase().contains(
-        _searchQuery.toLowerCase(),
-      );
-      final matchesFilter =
-          _statusFilter == 'All' ||
-          (_statusFilter == 'Cash' && (s['cash'] ?? 0) > 0) ||
-          (_statusFilter == 'Card' && (s['card'] ?? 0) > 0) ||
-          (_statusFilter == 'Other' && (s['other'] ?? 0) > 0);
-      return matchesSearch && matchesFilter;
-    }).toList();
+    final sales = appData.sales;
+    final dateFormat = DateFormat('yyyy-MM-dd');
+    final timeFormat = DateFormat('hh:mm a');
 
-    // Summary values
-    final totalCount = mySales.length;
-    final totalCash = mySales.fold<num>(
+    final cashTotal = sales.fold<double>(0, (sum, s) => sum + (s['cash'] ?? 0));
+    final cardTotal = sales.fold<double>(0, (sum, s) => sum + (s['card'] ?? 0));
+    final otherTotal = sales.fold<double>(
       0,
-      (sum, s) => sum + (s['cash'] is num ? s['cash'] : 0),
-    );
-    final totalCard = mySales.fold<num>(
-      0,
-      (sum, s) => sum + (s['card'] is num ? s['card'] : 0),
-    );
-    final totalOther = mySales.fold<num>(
-      0,
-      (sum, s) => sum + (s['other'] is num ? s['other'] : 0),
+      (sum, s) => sum + (s['other'] ?? 0),
     );
 
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: Colors.deepPurple,
-        title: Text(
-          role == 'employee' ? 'My Sales' : 'All Sales',
-          style: const TextStyle(color: Colors.white),
-        ),
-      ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: GridView.count(
-              shrinkWrap: true,
-              crossAxisCount: 2,
-              childAspectRatio: 1.4,
-              physics: const NeverScrollableScrollPhysics(),
-              children: [
-                SummaryCard(
-                  icon: Icons.attach_money,
-                  title: 'Total',
-                  count: totalCount.toString(),
-                  color: Colors.deepPurple,
-                ),
-                SummaryCard(
-                  icon: Icons.money,
-                  title: 'Cash',
-                  count: totalCash.toStringAsFixed(0),
-                  color: Colors.green,
-                ),
-                SummaryCard(
-                  icon: Icons.credit_card,
-                  title: 'Card',
-                  count: totalCard.toStringAsFixed(0),
-                  color: Colors.blue,
-                ),
-                SummaryCard(
-                  icon: Icons.account_balance_wallet,
-                  title: 'Other',
-                  count: totalOther.toStringAsFixed(0),
-                  color: Colors.orange,
-                ),
-              ],
-            ),
+        title: const Text('Sales Report'),
+        backgroundColor: Colors.teal,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.picture_as_pdf),
+            tooltip: 'Export PDF',
+            onPressed: () => exportPDF(sales),
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: SearchAndFilterBar(
-              onSearchChanged: (query) => setState(() => _searchQuery = query),
-              filterOptions: const ['All', 'Cash', 'Card', 'Other'],
-              selectedFilter: _statusFilter,
-              onFilterChanged: (value) => setState(() => _statusFilter = value),
-            ),
-          ),
-          const Divider(),
-          Expanded(
-            child: mySales.isEmpty
-                ? const Center(child: Text('No sales yet'))
-                : ListView.separated(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: mySales.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 12),
-                    itemBuilder: (_, index) {
-                      final sale = mySales[index];
-                     final dynamic createdAt = sale['createdAt'];
-                      DateTime? displayTime;
-
-                      if (createdAt is Timestamp) {
-                        displayTime = createdAt.toDate();
-                      } else if (createdAt is DateTime) {
-                        displayTime = createdAt;
-                      } else if (createdAt is String) {
-                        displayTime = DateTime.tryParse(createdAt);
-                      } else {
-                        displayTime = null;
-                      }
-                      final formatted = displayTime != null
-                          ? DateFormat('dd MMM, hh:mm a').format(displayTime)
-                          : 'N/A';
-
-                      return Card(
-                        child: ListTile(
-                          title: Text('💵 Rs. ${sale['total']}'),
-                          subtitle: Text(
-                            '🧍 ${sale['employee']} - 🕒 $formatted',
-                          ),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                icon: const Icon(
-                                  Icons.edit,
-                                  color: Colors.orange,
-                                ),
-                                onPressed: () =>
-                                    _openEditSaleModal(context, sale),
-                              ),
-                              IconButton(
-                                icon: const Icon(
-                                  Icons.delete,
-                                  color: Colors.red,
-                                ),
-                                onPressed: () =>
-                                    _confirmDelete(sale['id'].toString()),
-                              ),
-                              if (role == 'employee')
-                                IconButton(
-                                  icon: const Icon(
-                                    Icons.request_page,
-                                    color: Colors.blue,
-                                  ),
-                                  onPressed: () =>
-                                      _showRequestEditDialog(context, sale),
-                                ),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                  ),
+          IconButton(
+            icon: const Icon(Icons.table_chart),
+            tooltip: 'Export CSV',
+            onPressed: () => exportCSV(sales),
           ),
         ],
       ),
+      floatingActionButton: FloatingActionButton.extended(
+        icon: const Icon(Icons.add),
+        label: const Text('Add Sale'),
+        backgroundColor: Colors.teal,
+        onPressed: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const AddSaleScreen()),
+          );
+        },
+      ),
+      body: sales.isEmpty
+          ? const Center(child: Text('No sales data available.'))
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  color: Colors.teal.shade50,
+                  padding: const EdgeInsets.all(12),
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        Text(
+                          '💵 Cash: Rs $cashTotal',
+                          style: const TextStyle(fontSize: 14),
+                        ),
+                        const SizedBox(width: 16),
+                        Text(
+                          '💳 Card: Rs $cardTotal',
+                          style: const TextStyle(fontSize: 14),
+                        ),
+                        const SizedBox(width: 16),
+                        Text(
+                          '🪙 Other: Rs $otherTotal',
+                          style: const TextStyle(fontSize: 14),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(minWidth: 800),
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.vertical,
+                        child: DataTable(
+                          headingRowColor: WidgetStateProperty.all(
+                            Colors.grey[300],
+                          ),
+                          columns: const [
+                            DataColumn(label: Text('Date')),
+                            DataColumn(label: Text('Time')),
+                            DataColumn(label: Text('Shop')),
+                            DataColumn(label: Text('Cash')),
+                            DataColumn(label: Text('Card')),
+                            DataColumn(label: Text('Other')),
+                            DataColumn(label: Text('Total')),
+                            DataColumn(label: Text('Submitted By')),
+                          ],
+                          rows: sales.map((sale) {
+                            final dt = sale['createdAt'] ?? DateTime.now();
+                            return DataRow(
+                              cells: [
+                                DataCell(Text(dateFormat.format(dt))),
+                                DataCell(Text(timeFormat.format(dt))),
+                                DataCell(Text(sale['shop'] ?? '-')),
+                                DataCell(Text('Rs ${sale['cash'] ?? 0}')),
+                                DataCell(Text('Rs ${sale['card'] ?? 0}')),
+                                DataCell(Text('Rs ${sale['other'] ?? 0}')),
+                                DataCell(Text('Rs ${sale['total'] ?? 0}')),
+                                DataCell(Text(sale['employee'] ?? '-')),
+                              ],
+                            );
+                          }).toList(),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
     );
+  }
+
+  @override
+  void dispose() {
+    _mounted = false;
+    super.dispose();
   }
 }

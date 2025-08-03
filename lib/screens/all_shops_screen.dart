@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/app_data_provider.dart';
+import '../screens/add_shop_screen.dart';
+import '../screens/shop_detail_screen.dart';
 import '../utils/delete_shop_dialog.dart';
-import 'shop_detail_screen.dart';
 
 class AllShopsScreen extends StatefulWidget {
   const AllShopsScreen({super.key});
@@ -20,13 +21,16 @@ class _AllShopsScreenState extends State<AllShopsScreen> {
     final appData = Provider.of<AppDataProvider>(context);
     final user = appData.loggedInUser;
     final role = user?['role'] ?? 'employee';
-    final isAdmin = role == 'admin' || role == 'owner';
+    final isAdmin = role == 'admin';
+    final isManager = role == 'manager';
 
     final visibleShops = appData.shops
         .where(
           (shop) =>
               shop['isDeleted'] != true &&
-              shop['name'].toLowerCase().contains(searchQuery.toLowerCase()),
+              shop['name'].toString().toLowerCase().contains(
+                searchQuery.toLowerCase(),
+              ),
         )
         .toList();
 
@@ -34,6 +38,19 @@ class _AllShopsScreenState extends State<AllShopsScreen> {
       appBar: AppBar(
         title: const Text("All Shops"),
         backgroundColor: Colors.deepPurple,
+        actions: [
+          if (isAdmin || isManager)
+            IconButton(
+              icon: const Icon(Icons.add_business),
+              tooltip: "Add Shop",
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const AddShopScreen()),
+                );
+              },
+            ),
+        ],
       ),
       body: Padding(
         padding: const EdgeInsets.all(16),
@@ -76,7 +93,7 @@ class _AllShopsScreenState extends State<AllShopsScreen> {
                               ),
                               if (employeeNames.isEmpty)
                                 const ListTile(
-                                  title: Text("No employees assigned"),
+                                  title: Text("No employees assigned."),
                                 )
                               else
                                 ...employeeNames.map<Widget>((empName) {
@@ -106,10 +123,8 @@ class _AllShopsScreenState extends State<AllShopsScreen> {
                                     ),
                                   );
                                 }).toList(),
-
                               const Divider(),
 
-                              // View Details Button
                               ListTile(
                                 leading: const Icon(Icons.info_outline),
                                 title: const Text("View Full Details"),
@@ -124,7 +139,21 @@ class _AllShopsScreenState extends State<AllShopsScreen> {
                                 },
                               ),
 
-                              // Delete Shop Button
+                              if (isAdmin || isManager)
+                                ListTile(
+                                  leading: const Icon(Icons.edit),
+                                  title: const Text("Edit Shop"),
+                                  onTap: () {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) =>
+                                            AddShopScreen(existingShop: shop),
+                                      ),
+                                    );
+                                  },
+                                ),
+
                               if (isAdmin)
                                 ListTile(
                                   leading: const Icon(

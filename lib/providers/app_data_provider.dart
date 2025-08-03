@@ -293,24 +293,16 @@ class AppDataProvider extends ChangeNotifier {
   List<Map<String, dynamic>> get allSales => [..._sales];
 
   List<Map<String, dynamic>> get sales {
-    final now = DateTime.now();
-    return _sales.where((s) {
-      final rawCreatedAt = s['createdAt'];
-      DateTime? createdAt;
+    final role = _loggedInUser?['role'];
+    final name = _loggedInUser?['name'];
 
-      if (rawCreatedAt is DateTime) {
-        createdAt = rawCreatedAt;
-      } else if (rawCreatedAt is Timestamp) {
-        createdAt = rawCreatedAt.toDate();
-      } else if (rawCreatedAt is String) {
-        createdAt = DateTime.tryParse(rawCreatedAt);
-      }
-
-      final isRecent =
-          createdAt != null && now.difference(createdAt).inMinutes < 5;
-      final isOwner = s['addedBy'] == _loggedInUser?['name'];
-      return isOwner && isRecent;
-    }).toList();
+    if (role == 'admin' || role == 'manager') {
+      return _sales;
+    } else if (role == 'employee') {
+      return _sales.where((s) => s['employee'] == name).toList();
+    } else {
+      return [];
+    }
   }
 
   Future<void> addSale(Map<String, dynamic> saleData) async {
@@ -440,9 +432,10 @@ class AppDataProvider extends ChangeNotifier {
   // Dashboard Counters
   // ---------------------------
   int get totalOrders => _orders.length;
-  double get totalSales =>
-      _sales.fold(0.0, (sumValue, s) => sumValue + (s['total'] ?? 0.0));
-
+  double get totalSales => sales.fold(0.0, (sumValue, s) {
+    final total = double.tryParse(s['total'].toString()) ?? 0.0;
+    return sumValue + total;
+  });
   int get totalShops => shops.length;
   int get totalEmployees => employees.length;
 
@@ -458,7 +451,7 @@ class AppDataProvider extends ChangeNotifier {
     final now = DateTime.now();
 
     return sales.where((sale) {
-     final raw = sale['date'] ?? sale['createdAt'];
+      final raw = sale['date'] ?? sale['createdAt'];
       final date = raw is Timestamp
           ? raw.toDate()
           : (raw is DateTime ? raw : now);
@@ -559,7 +552,7 @@ class AppDataProvider extends ChangeNotifier {
     }
   }
 
- Future<void> fetchSales() async {
+  Future<void> fetchSales() async {
     try {
       final snapshot = await FirebaseFirestore.instance
           .collection('sales')
@@ -580,7 +573,16 @@ class AppDataProvider extends ChangeNotifier {
             createdAt = DateTime.tryParse(rawCreatedAt);
           }
 
-          return {'id': doc.id, ...data, 'createdAt': createdAt};
+          return {
+            'id': doc.id,
+            'shop': data['shop'] ?? '',
+            'employee': data['employee'] ?? '',
+            'cash': (data['cash'] ?? 0) * 1.0,
+            'card': (data['card'] ?? 0) * 1.0,
+            'other': (data['other'] ?? 0) * 1.0,
+            'total': (data['total'] ?? 0) * 1.0,
+            'createdAt': createdAt,
+          };
         }),
       );
       notifyListeners();

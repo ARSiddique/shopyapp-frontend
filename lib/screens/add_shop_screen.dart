@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:provider/provider.dart';
+import '../providers/app_data_provider.dart';
 
 class AddShopScreen extends StatefulWidget {
-  const AddShopScreen({super.key});
+  final Map<String, dynamic>? existingShop;
+
+  const AddShopScreen({super.key, this.existingShop});
 
   @override
   State<AddShopScreen> createState() => _AddShopScreenState();
@@ -11,76 +15,111 @@ class AddShopScreen extends StatefulWidget {
 class _AddShopScreenState extends State<AddShopScreen> {
   final _formKey = GlobalKey<FormState>();
   final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _locationController = TextEditingController();
+  bool _isOpen = true;
   bool _isLoading = false;
 
-  void _submitShop() async {
-  if (!_formKey.currentState!.validate()) return;
-
-  setState(() => _isLoading = true);
-
-  final shopData = {
-      'name': _nameController.text.trim(),
-      'location': _locationController.text.trim(),
-      'employees': [],
-      'createdAt': Timestamp.now(),
-      'isDeleted': false,
-      'isOpen': true, // ✅ Add this line to fix the error
-    };
-  try {
-    await FirebaseFirestore.instance.collection('shops').add(shopData);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Shop added successfully')),
-      );
-      Navigator.of(context).pop();
+  @override
+  void initState() {
+    super.initState();
+    if (widget.existingShop != null) {
+      _nameController.text = widget.existingShop!['name'] ?? '';
+      _isOpen = widget.existingShop!['isOpen'] ?? true;
     }
-  } catch (e) {
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error adding shop: $e')),
-      );
-    }
-  } finally {
-    if (mounted) setState(() => _isLoading = false);
   }
-}
+
+  Future<void> _submitShop() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() => _isLoading = true);
+    final appData = Provider.of<AppDataProvider>(context, listen: false);
+
+    final shopData = {
+      'name': _nameController.text.trim(),
+      'isOpen': _isOpen,
+      'isDeleted': false,
+      'updatedAt': DateTime.now(),
+    };
+
+    try {
+      if (widget.existingShop != null) {
+        // Update existing shop
+        final docId = widget.existingShop!['id'];
+        await FirebaseFirestore.instance
+            .collection('shops')
+            .doc(docId)
+            .update(shopData);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Shop updated successfully')),
+        );
+      } else {
+        // Add new shop
+        shopData['createdAt'] = DateTime.now();
+        await FirebaseFirestore.instance.collection('shops').add(shopData);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Shop added successfully')),
+        );
+      }
+
+      await appData.fetchShops();
+      Navigator.pop(context);
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
+    }
+
+    setState(() => _isLoading = false);
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final isEditing = widget.existingShop != null;
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Add Shop'),
+        title: Text(isEditing ? 'Edit Shop' : 'Add Shop'),
         backgroundColor: Colors.deepPurple,
       ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Form(
           key: _formKey,
-          child: Column(
+          child: ListView(
             children: [
               TextFormField(
                 controller: _nameController,
-                decoration: const InputDecoration(labelText: 'Shop Name'),
-                validator: (value) =>
-                    value == null || value.isEmpty ? 'Enter shop name' : null,
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _locationController,
-                decoration: const InputDecoration(labelText: 'Location'),
-                validator: (value) => value == null || value.isEmpty
-                    ? 'Enter shop location'
+                decoration: const InputDecoration(
+                  labelText: 'Shop Name',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (val) => val == null || val.trim().isEmpty
+                    ? 'Please enter a shop name'
                     : null,
               ),
+              const SizedBox(height: 16),
+              SwitchListTile(
+                title: const Text('Is Shop Open?'),
+                value: _isOpen,
+                onChanged: (val) => setState(() => _isOpen = val),
+              ),
               const SizedBox(height: 24),
-              _isLoading
-                  ? const CircularProgressIndicator()
-                  : ElevatedButton.icon(
-                      icon: const Icon(Icons.save),
-                      label: const Text('Add Shop'),
-                      onPressed: _submitShop,
-                    ),
+              ElevatedButton(
+                onPressed: _isLoading ? null : _submitShop,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.deepPurple,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+                child: Text(
+                  isEditing ? 'Update Shop' : 'Add Shop',
+                  style: const TextStyle(fontSize: 16),
+                ),
+              ),
             ],
           ),
         ),

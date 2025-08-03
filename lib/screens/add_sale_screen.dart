@@ -1,11 +1,7 @@
-import 'dart:async';
-import 'dart:io' show Platform;
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../providers/app_data_provider.dart';
-import '../screens/login_screen.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../providers/app_data_provider.dart';
 
 class AddSaleScreen extends StatefulWidget {
   const AddSaleScreen({super.key});
@@ -15,69 +11,65 @@ class AddSaleScreen extends StatefulWidget {
 }
 
 class _AddSaleScreenState extends State<AddSaleScreen> {
-  final TextEditingController cashController = TextEditingController();
-  final TextEditingController cardController = TextEditingController();
-  final TextEditingController otherController = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
+  final cashController = TextEditingController();
+  final cardController = TextEditingController();
+  final otherController = TextEditingController();
+  String _selectedDay = 'today';
+  bool _isSubmitting = false;
 
-  Timer? _countdownTimer;
-  Duration? _remainingTime;
-  Map<String, dynamic>? _lastSale;
-
-  @override
-  void initState() {
-    super.initState();
-    _initCountdown();
-  }
-
-  void _initCountdown() {
+  bool hasSubmittedForDate(DateTime date, String employeeName) {
     final appData = Provider.of<AppDataProvider>(context, listen: false);
-    final user = appData.loggedInUser;
-    if (user == null) return;
-
-    final employeeName = user['name'];
-    final sales = appData.sales
-        .where((s) => s['employee'] == employeeName)
-        .toList();
-
-    if (sales.isNotEmpty) {
-      final recentSale = sales.last;
-      final createdAtRaw = recentSale['createdAt'];
-      final createdAt = createdAtRaw is Timestamp
-          ? createdAtRaw.toDate()
-          : (createdAtRaw is DateTime ? createdAtRaw : DateTime.now());
-
-      final elapsed = DateTime.now().difference(createdAt);
-
-      if (elapsed.inMinutes < 5) {
-        setState(() {
-          _lastSale = recentSale;
-          _remainingTime = const Duration(minutes: 5) - elapsed;
-        });
-        _startTimer();
-      }
-    }
-  }
-
-  void _startTimer() {
-    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (_remainingTime != null && _remainingTime!.inSeconds > 0) {
-        setState(() {
-          _remainingTime = _remainingTime! - const Duration(seconds: 1);
-        });
-      } else {
-        _countdownTimer?.cancel();
-        setState(() {
-          _remainingTime = null;
-          _lastSale = null;
-        });
-      }
+    return appData.sales.any((sale) {
+      final createdAt = sale['createdAt'];
+      final saleDate = createdAt is Timestamp
+          ? createdAt.toDate()
+          : (createdAt is DateTime ? createdAt : DateTime.now());
+      return saleDate.year == date.year &&
+          saleDate.month == date.month &&
+          saleDate.day == date.day &&
+          sale['employee'] == employeeName;
     });
   }
 
-  void _submitSale() {
+  Future<void> _submitSale() async {
+    if (!_formKey.currentState!.validate()) return;
     final appData = Provider.of<AppDataProvider>(context, listen: false);
     final user = appData.loggedInUser;
     if (user == null) return;
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final yesterday = today.subtract(const Duration(days: 1));
+    final selectedDate = _selectedDay == 'today' ? today : yesterday;
+
+    final alreadySubmitted = hasSubmittedForDate(selectedDate, user['name']);
+    if (alreadySubmitted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Sale for $_selectedDay already submitted!')),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Confirm Submission'),
+        content: Text('Submit sale for $_selectedDay?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Confirm'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (confirmed != true) return;
 
     final double cash = double.tryParse(cashController.text.trim()) ?? 0;
     final double card = double.tryParse(cardController.text.trim()) ?? 0;
@@ -90,35 +82,35 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
       );
       return;
     }
-final now = DateTime.now();
-   final sale = {
-      'id': now.millisecondsSinceEpoch.toString(),
+
+    final sale = {
+      'id': DateTime.now().millisecondsSinceEpoch.toString(),
       'employee': user['name'],
       'shop': user['assignedShops']?[0] ?? '',
       'cash': cash,
       'card': card,
       'other': other,
       'total': total,
-      'createdAt': now,
-      'date': Timestamp.fromDate(
-        DateTime(now.year, now.month, now.day),
-      ), // ✅ Added!
+      'createdAt': DateTime.now(),
+      'date': Timestamp.fromDate(selectedDate),
     };
 
-    appData.addSale(sale);
-    cashController.clear();
-    cardController.clear();
-    otherController.clear();
+    setState(() => _isSubmitting = true);
+    await appData.addSale(sale);
+    if (!mounted) return;
+    setState(() => _isSubmitting = false);
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Sale submitted successfully')),
     );
-    _initCountdown();
+
+    cashController.clear();
+    cardController.clear();
+    otherController.clear();
   }
 
   @override
   void dispose() {
-    _countdownTimer?.cancel();
     cashController.dispose();
     cardController.dispose();
     otherController.dispose();
@@ -127,128 +119,78 @@ final now = DateTime.now();
 
   @override
   Widget build(BuildContext context) {
+    final user = Provider.of<AppDataProvider>(context).loggedInUser;
+    if (user == null) {
+      return const Scaffold(body: Center(child: Text('User not found')));
+    }
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final yesterday = today.subtract(const Duration(days: 1));
+    final canSubmitYesterday = !hasSubmittedForDate(yesterday, user['name']);
+
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.deepPurple,
-        title: const Text('Report Daily Sale'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout, color: Colors.red),
-            onPressed: () => _showLogoutDialog(context),
-          ),
-        ],
-      ),
+      appBar: AppBar(title: const Text('Add Sale')),
       body: Padding(
         padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextField(
-              controller: cashController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Cash Amount',
-                prefixIcon: Icon(Icons.money),
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: cardController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Credit/Debit Amount',
-                prefixIcon: Icon(Icons.credit_card),
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: otherController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Cash App / Venmo Amount',
-                prefixIcon: Icon(Icons.account_balance_wallet),
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 20),
-            ElevatedButton.icon(
-              onPressed: _submitSale,
-              icon: const Icon(Icons.check),
-              label: const Text('Submit'),
-            ),
-            if (_remainingTime != null) ...[
-              const SizedBox(height: 16),
-              Text(
-                '⏱ Edit Available: ${_remainingTime!.inMinutes.remainder(60).toString().padLeft(2, '0')}:${_remainingTime!.inSeconds.remainder(60).toString().padLeft(2, '0')}',
-                style: const TextStyle(
-                  color: Colors.red,
-                  fontWeight: FontWeight.bold,
+        child: Form(
+          key: _formKey,
+          child: Column(
+            children: [
+              if (canSubmitYesterday)
+                DropdownButtonFormField<String>(
+                  value: _selectedDay,
+                  decoration: const InputDecoration(
+                    labelText: 'Select Date',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 'today', child: Text('Today')),
+                    DropdownMenuItem(
+                      value: 'yesterday',
+                      child: Text('Yesterday'),
+                    ),
+                  ],
+                  onChanged: (value) =>
+                      setState(() => _selectedDay = value ?? 'today'),
+                ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: cashController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Cash',
+                  border: OutlineInputBorder(),
                 ),
               ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: cardController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Card',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: otherController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Other',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: _isSubmitting ? null : _submitSale,
+                icon: const Icon(Icons.check),
+                label: const Text('Submit Sale'),
+              ),
             ],
-          ],
+          ),
         ),
       ),
     );
-  }
-
-  void _showLogoutDialog(BuildContext context) {
-    final appData = Provider.of<AppDataProvider>(context, listen: false);
-    if (Platform.isIOS) {
-      showCupertinoDialog(
-        context: context,
-        builder: (_) => CupertinoAlertDialog(
-          title: const Text('Logout?'),
-          content: const Text('Are you sure you want to logout?'),
-          actions: [
-            CupertinoDialogAction(
-              child: const Text('Cancel'),
-              onPressed: () => Navigator.of(context).pop(),
-            ),
-            CupertinoDialogAction(
-              isDestructiveAction: true,
-              child: const Text('Logout'),
-              onPressed: () {
-                Navigator.of(context).pop();
-                appData.logout();
-                Navigator.pushAndRemoveUntil(
-                  context,
-                  MaterialPageRoute(builder: (_) => const LoginScreen()),
-                  (_) => false,
-                );
-              },
-            ),
-          ],
-        ),
-      );
-    } else {
-      showDialog(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text('Logout'),
-          content: const Text('Are you sure you want to logout?'),
-          actions: [
-            TextButton(
-              child: const Text('Cancel'),
-              onPressed: () => Navigator.of(context).pop(),
-            ),
-            TextButton(
-              child: const Text('Logout'),
-              onPressed: () {
-                Navigator.of(context).pop();
-                appData.logout();
-                Navigator.pushAndRemoveUntil(
-                  context,
-                  MaterialPageRoute(builder: (_) => const LoginScreen()),
-                  (_) => false,
-                );
-              },
-            ),
-          ],
-        ),
-      );
-    }
   }
 }

@@ -21,14 +21,11 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.ars.shopyapp"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
-        versionCode = flutter.versionCode
-        versionName = flutter.versionName
+         applicationId = "com.ars.shopyapp"
+    minSdk = 21                // ✅ Should be at least 21
+    targetSdk = flutter.targetSdkVersion          // ✅ ⚠️ Set this to **30** for storage access to work reliably
+    versionCode = flutter.versionCode
+    versionName = flutter.versionName
     }
 
     buildTypes {

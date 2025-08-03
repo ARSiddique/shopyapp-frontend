@@ -7,7 +7,9 @@ import '../widgets/summary_card.dart';
 import '../widgets/search_and_filter_bar.dart';
 
 class OrdersScreen extends StatefulWidget {
-  const OrdersScreen({super.key});
+  final List<Map<String, dynamic>>? filteredOrders;
+
+  const OrdersScreen({super.key, this.filteredOrders});
 
   @override
   State<OrdersScreen> createState() => _OrdersScreenState();
@@ -71,9 +73,11 @@ class _OrdersScreenState extends State<OrdersScreen> {
     final role = (user['role'] ?? '').toString().toLowerCase();
     final name = user['name']?.toString() ?? '';
 
-    List<Map<String, dynamic>> myOrders = role == 'employee'
-        ? appData.orders.where((o) => o['employee'] == name).toList()
-        : appData.orders;
+    List<Map<String, dynamic>> myOrders =
+        widget.filteredOrders ??
+        (role == 'employee'
+            ? appData.orders.where((o) => o['employee'] == name).toList()
+            : appData.orders);
 
     myOrders = myOrders.where((o) {
       final matchesSearch = o['items'].toString().toLowerCase().contains(
