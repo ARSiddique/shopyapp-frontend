@@ -73,7 +73,9 @@ class _AllShopsScreenState extends State<AllShopsScreen> {
                       itemBuilder: (_, index) {
                         final shop = visibleShops[index];
                         final shopName = shop['name'];
-                        final employeeNames = shop['employees'] ?? [];
+                        final employeeNames = shop.containsKey('employees')
+                            ? shop['employees']
+                            : [];
                         final orderCount = appData.orders
                             .where((o) => o['shop'] == shopName)
                             .length;
@@ -124,7 +126,6 @@ class _AllShopsScreenState extends State<AllShopsScreen> {
                                   );
                                 }).toList(),
                               const Divider(),
-
                               ListTile(
                                 leading: const Icon(Icons.info_outline),
                                 title: const Text("View Full Details"),
@@ -138,7 +139,6 @@ class _AllShopsScreenState extends State<AllShopsScreen> {
                                   );
                                 },
                               ),
-
                               if (isAdmin || isManager)
                                 ListTile(
                                   leading: const Icon(Icons.edit),
@@ -153,7 +153,6 @@ class _AllShopsScreenState extends State<AllShopsScreen> {
                                     );
                                   },
                                 ),
-
                               if (isAdmin)
                                 ListTile(
                                   leading: const Icon(

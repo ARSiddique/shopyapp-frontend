@@ -519,12 +519,16 @@ class HomeDashboard extends StatelessWidget {
                                 : visibleShops.length,
                             itemBuilder: (_, index) {
                               final shop = visibleShops[index];
-                              final shopName = shop['name'] ?? 'Unnamed';
-                              final employees = shop['employees'] ?? [];
+                              final data = shop.data() as Map<String, dynamic>;
+                              final shopName = data['name'] ?? 'Unnamed';
+                              final employees = data.containsKey('employees')
+                                  ? data['employees']
+                                  : [];
+
                               return ShopCard(
                                 shopName: shopName,
                                 employeeCount: employees.length,
-                                isOpen: shop['isOpen'] ?? false,
+                                isOpen: data['isOpen'] ?? false,
                                 orderCount: appData.orders
                                     .where((o) => o['shop'] == shopName)
                                     .length,

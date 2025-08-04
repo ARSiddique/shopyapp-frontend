@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:provider/provider.dart';
+import '../providers/app_data_provider.dart';
 
 class AddEmployeeAndAccessScreen extends StatefulWidget {
   final Map<String, dynamic>? existingEmployee;
@@ -26,21 +28,52 @@ class _AddEmployeeAndAccessScreenState
   bool _obscurePassword = true;
   bool _isEditMode = false;
 
+  Map<String, dynamic>? _loggedInUser;
+  bool _isAssigningToSelf = false;
+
   @override
   void initState() {
     super.initState();
 
-    if (widget.existingEmployee != null) {
-      _isEditMode = true;
-      final emp = widget.existingEmployee!;
-      _nameController.text = emp['name'] ?? '';
-      _phoneController.text = emp['phone'] ?? '';
-      _emailController.text = emp['email'] ?? '';
-      _selectedRole = emp['role'] ?? 'employee';
-      _selectedShops.addAll(
-        (emp['assignedShops'] as List?)?.map((e) => e.toString()) ?? [],
-      );
-    }
+    Future.delayed(Duration.zero, () {
+      final user = Provider.of<AppDataProvider>(
+        context,
+        listen: false,
+      ).loggedInUser;
+      _loggedInUser = user;
+
+      final routeArgs = ModalRoute.of(context)?.settings.arguments;
+      _isAssigningToSelf = routeArgs == 'assignMyself';
+
+      if (_isAssigningToSelf) {
+        setState(() {
+          _isEditMode = true;
+          _nameController.text = user?['name'] ?? '';
+          _phoneController.text = user?['phone'] ?? '';
+          _emailController.text = user?['email'] ?? '';
+          _selectedRole = user?['role'] ?? 'employee';
+          _selectedShops.addAll(
+            (user?['assignedShops'] as List<dynamic>? ?? []).map(
+              (e) => e.toString(),
+            ),
+          );
+        });
+      } else if (widget.existingEmployee != null) {
+        final emp = widget.existingEmployee!;
+        setState(() {
+          _isEditMode = true;
+          _nameController.text = emp['name'] ?? '';
+          _phoneController.text = emp['phone'] ?? '';
+          _emailController.text = emp['email'] ?? '';
+          _selectedRole = emp['role'] ?? 'employee';
+          _selectedShops.addAll(
+            (emp['assignedShops'] as List<dynamic>? ?? []).map(
+              (e) => e.toString(),
+            ),
+          );
+        });
+      }
+    });
   }
 
   Future<void> _submit() async {
@@ -48,7 +81,7 @@ class _AddEmployeeAndAccessScreenState
     setState(() => _isLoading = true);
 
     try {
-      // Manager uniqueness check only when adding
+      // 🔒 Only one manager allowed
       if (!_isEditMode && _selectedRole == 'manager') {
         final existingManager = await FirebaseFirestore.instance
             .collection('employees')
@@ -67,6 +100,7 @@ class _AddEmployeeAndAccessScreenState
         }
       }
 
+      // 🔸 Validate shop assignment for employees
       if (_selectedRole == 'employee' && _selectedShops.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -76,23 +110,6 @@ class _AddEmployeeAndAccessScreenState
         );
         setState(() => _isLoading = false);
         return;
-      }
-
-      // Assign shop updates
-      if (_selectedRole == 'employee') {
-        for (String shopName in _selectedShops) {
-          final query = await FirebaseFirestore.instance
-              .collection('shops')
-              .where('name', isEqualTo: shopName)
-              .limit(1)
-              .get();
-          if (query.docs.isNotEmpty) {
-            final shopDoc = query.docs.first.reference;
-            await shopDoc.update({
-              'employees': FieldValue.arrayUnion([_nameController.text.trim()]),
-            });
-          }
-        }
       }
 
       final employeeData = {
@@ -107,16 +124,66 @@ class _AddEmployeeAndAccessScreenState
       };
 
       if (_isEditMode) {
-        final id = widget.existingEmployee!['uid'];
-        await FirebaseFirestore.instance
+        final id = widget.existingEmployee?['uid'] ?? _loggedInUser?['uid'];
+
+        // 🧹 Remove from old shops
+        final oldShops = widget.existingEmployee?['assignedShops'] ?? [];
+        for (String shopName in oldShops) {
+          final query = await FirebaseFirestore.instance
+              .collection('shops')
+              .where('name', isEqualTo: shopName)
+              .limit(1)
+              .get();
+          if (query.docs.isNotEmpty) {
+            final shopDoc = query.docs.first.reference;
+            await shopDoc.update({
+              'employees': FieldValue.arrayRemove([
+                _nameController.text.trim(),
+              ]),
+            });
+          }
+        }
+
+        // 📝 Update employee and user documents
+        final empRef = FirebaseFirestore.instance
             .collection('employees')
-            .doc(id)
-            .update(employeeData);
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(id)
-            .update(employeeData);
+            .doc(id);
+        final userRef = FirebaseFirestore.instance.collection('users').doc(id);
+
+        final empSnap = await empRef.get();
+        if (!empSnap.exists) {
+          await empRef.set(employeeData);
+        } else {
+          await empRef.update(employeeData);
+        }
+
+        final userSnap = await userRef.get();
+        if (!userSnap.exists) {
+          await userRef.set(employeeData);
+        } else {
+          await userRef.update(employeeData);
+        }
+
+        // 🔄 Re-add to new shops
+        if (_selectedRole == 'employee') {
+          for (String shopName in _selectedShops) {
+            final query = await FirebaseFirestore.instance
+                .collection('shops')
+                .where('name', isEqualTo: shopName)
+                .limit(1)
+                .get();
+            if (query.docs.isNotEmpty) {
+              final shopDoc = query.docs.first.reference;
+              await shopDoc.update({
+                'employees': FieldValue.arrayUnion([
+                  _nameController.text.trim(),
+                ]),
+              });
+            }
+          }
+        }
       } else {
+        // 🔐 Create user and save both records
         final password = _passwordController.text.trim();
         final userCredential = await FirebaseAuth.instance
             .createUserWithEmailAndPassword(
@@ -141,6 +208,25 @@ class _AddEmployeeAndAccessScreenState
             .collection('users')
             .doc(uid)
             .set(employeeData);
+
+        // 🔄 Add to shops for new employee
+        if (_selectedRole == 'employee') {
+          for (String shopName in _selectedShops) {
+            final query = await FirebaseFirestore.instance
+                .collection('shops')
+                .where('name', isEqualTo: shopName)
+                .limit(1)
+                .get();
+            if (query.docs.isNotEmpty) {
+              final shopDoc = query.docs.first.reference;
+              await shopDoc.update({
+                'employees': FieldValue.arrayUnion([
+                  _nameController.text.trim(),
+                ]),
+              });
+            }
+          }
+        }
       }
 
       if (mounted) {
@@ -179,23 +265,32 @@ class _AddEmployeeAndAccessScreenState
           key: _formKey,
           child: ListView(
             children: [
+              if (_isAssigningToSelf)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    "You're assigning shops to yourself. Name, email, and login info are locked.",
+                    style: TextStyle(color: Colors.deepPurple),
+                  ),
+                ),
               TextFormField(
                 controller: _nameController,
                 decoration: const InputDecoration(labelText: 'Name'),
-                readOnly: _isEditMode,
+                readOnly: _isAssigningToSelf,
                 validator: (val) =>
                     val == null || val.isEmpty ? 'Enter name' : null,
               ),
               TextFormField(
                 controller: _phoneController,
                 decoration: const InputDecoration(labelText: 'Phone'),
+                readOnly: _isAssigningToSelf,
                 validator: (val) =>
                     val == null || val.isEmpty ? 'Enter phone' : null,
               ),
               TextFormField(
                 controller: _emailController,
                 decoration: const InputDecoration(labelText: 'Email'),
-                readOnly: _isEditMode,
+                readOnly: _isAssigningToSelf,
                 validator: (val) =>
                     val == null || val.isEmpty ? 'Enter email' : null,
               ),
@@ -221,17 +316,19 @@ class _AddEmployeeAndAccessScreenState
                 ),
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(
-                value: _selectedRole,
+                value: ['employee', 'manager'].contains(_selectedRole)
+                    ? _selectedRole
+                    : null,
                 decoration: const InputDecoration(labelText: 'Role'),
                 items: const [
                   DropdownMenuItem(value: 'employee', child: Text('Employee')),
                   DropdownMenuItem(value: 'manager', child: Text('Manager')),
                 ],
-                onChanged: (val) {
-                  if (val != null) {
-                    setState(() => _selectedRole = val);
-                  }
-                },
+                onChanged: (_isAssigningToSelf || _selectedRole == 'admin')
+                    ? null
+                    : (val) {
+                        if (val != null) setState(() => _selectedRole = val);
+                      },
               ),
               const SizedBox(height: 16),
               const Text('Assign Shops (Optional for Managers/Admin):'),
@@ -241,9 +338,8 @@ class _AddEmployeeAndAccessScreenState
                     .where('isDeleted', isEqualTo: false)
                     .snapshots(),
                 builder: (context, snapshot) {
-                  if (!snapshot.hasData) {
+                  if (!snapshot.hasData)
                     return const Center(child: CircularProgressIndicator());
-                  }
                   final shopDocs = snapshot.data!.docs;
                   if (shopDocs.isEmpty) return const Text("No shops found.");
 

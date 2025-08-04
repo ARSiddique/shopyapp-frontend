@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../providers/theme_provider.dart';
 import '../providers/app_data_provider.dart';
 import '../screens/login_screen.dart';
+import 'add_employee_and_access_screen.dart';
 
 /// Shows a confirmation dialog before logging out.
 void showPlatformLogoutDialog(BuildContext context) {
@@ -126,17 +127,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
           'Profile & Settings',
           style: TextStyle(color: Colors.white),
         ),
-        // actions: [
-        //   IconButton(
-        //     icon: const Icon(Icons.logout, color: Colors.red),
-        //     onPressed: () => showPlatformLogoutDialog(context),
-        //   ),
-        // ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          // Header Card
+          // Header
           Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
@@ -191,10 +186,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           ),
 
-
-
-
           const SizedBox(height: 30),
+
           // Editable Fields
           TextField(
             controller: _emailController,
@@ -237,14 +230,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
             style: TextStyle(color: textColor),
           ),
           const SizedBox(height: 24),
+
           // Dark Mode Toggle
           SwitchListTile(
             title: const Text('Dark Mode'),
             value: isDarkMode,
             onChanged: (val) => themeProvider.toggleTheme(val),
           ),
+
           const SizedBox(height: 16),
-          // Save Button
+
+          // Save Changes
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
@@ -259,8 +255,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
             ),
           ),
+
+          const SizedBox(height: 24),
+
+          // 🔥 Assign Shops to Self (Admin/Manager only)
+          if (userRole == 'admin' || userRole == 'manager')
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.store),
+                label: const Text(
+                  'Assign Shops to Myself',
+                  style: TextStyle(color: Colors.white),
+                ),
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const AddEmployeeAndAccessScreen(),
+                      settings: const RouteSettings(arguments: 'assignMyself'),
+                    ),
+                  );
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.deepPurpleAccent,
+                ),
+              ),
+            ),
+
           const SizedBox(height: 40),
-          // Version Info
           Center(
             child: Text(
               'Version 1.0.0\nBuilt by ARS',

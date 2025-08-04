@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../providers/app_data_provider.dart';
 import 'add_sale_screen.dart';
+import '../widgets/edit_sale_modal.dart';
 
 class SalesScreen extends StatefulWidget {
   const SalesScreen({super.key});
@@ -45,6 +46,51 @@ class _SalesScreenState extends State<SalesScreen> {
     } else {
       return await getApplicationDocumentsDirectory(); // for iOS or other
     }
+  }
+
+  Future<void> _deleteSale(String saleId) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Sale?'),
+        content: const Text('Are you sure you want to delete this sale?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    final appData = Provider.of<AppDataProvider>(context, listen: false);
+    await appData.deleteSale(saleId);
+    if (_mounted && context.mounted) {
+      await appData.fetchSales();
+      setState(() {});
+    }
+  }
+
+  Future<void> _editSale(Map<String, dynamic> sale) async {
+    await showDialog(
+      context: context,
+      builder: (_) => EditSaleModal(
+        initialAmount: sale['total'] ?? 0.0,
+        onSubmit: (updatedAmount, reason) async {
+          final appData = Provider.of<AppDataProvider>(context, listen: false);
+          await appData.updateSaleAmount(sale['id'], updatedAmount, reason);
+          if (_mounted && context.mounted) {
+            await appData.fetchSales();
+            setState(() {});
+          }
+        },
+      ),
+    );
   }
 
   Future<void> exportCSV(List<Map<String, dynamic>> sales) async {
@@ -251,7 +297,34 @@ class _SalesScreenState extends State<SalesScreen> {
                                 DataCell(Text('Rs ${sale['card'] ?? 0}')),
                                 DataCell(Text('Rs ${sale['other'] ?? 0}')),
                                 DataCell(Text('Rs ${sale['total'] ?? 0}')),
-                                DataCell(Text(sale['employee'] ?? '-')),
+                                DataCell(
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(sale['employee'] ?? '-'),
+                                      ),
+                                      IconButton(
+                                        icon: const Icon(
+                                          Icons.edit,
+                                          size: 18,
+                                          color: Colors.blue,
+                                        ),
+                                        onPressed: () => _editSale(sale),
+                                        tooltip: 'Edit Sale',
+                                      ),
+                                      IconButton(
+                                        icon: const Icon(
+                                          Icons.delete,
+                                          size: 18,
+                                          color: Colors.red,
+                                        ),
+                                        onPressed: () =>
+                                            _deleteSale(sale['id']),
+                                        tooltip: 'Delete Sale',
+                                      ),
+                                    ],
+                                  ),
+                                ),
                               ],
                             );
                           }).toList(),

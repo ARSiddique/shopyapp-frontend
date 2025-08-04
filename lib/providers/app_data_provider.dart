@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:intl/intl.dart';
 
 class AppDataProvider extends ChangeNotifier {
   Map<String, dynamic>? _loggedInUser;
   final List<Map<String, dynamic>> _orders = [];
   final List<Map<String, dynamic>> _sales = [];
   final List<Map<String, dynamic>> _editRequests = [];
+  final FirebaseFirestore firestore = FirebaseFirestore.instance;
+
   List<Map<String, dynamic>> shops = [];
   List<Map<String, dynamic>> employees = [];
   List<Map<String, dynamic>> get orders => _orders;
@@ -100,6 +103,53 @@ class AppDataProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> cleanupShopFromEmployees(String shopName) async {
+    try {
+      // Remove shop from all employees
+      final empSnap = await firestore.collection('employees').get();
+      for (final doc in empSnap.docs) {
+        final assigned = List<String>.from(doc.data()['assignedShops'] ?? []);
+        if (assigned.contains(shopName)) {
+          assigned.remove(shopName);
+          await firestore.collection('employees').doc(doc.id).update({
+            'assignedShops': assigned,
+          });
+        }
+      }
+
+      // Remove shop from all users
+      final userSnap = await firestore.collection('users').get();
+      for (final doc in userSnap.docs) {
+        final assigned = List<String>.from(doc.data()['assignedShops'] ?? []);
+        if (assigned.contains(shopName)) {
+          assigned.remove(shopName);
+          await firestore.collection('users').doc(doc.id).update({
+            'assignedShops': assigned,
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('❌ Error cleaning shop from employees/users: $e');
+    }
+  }
+
+  Future<void> cleanupEmployeeFromShops(String employeeName) async {
+    try {
+      final snap = await firestore.collection('shops').get();
+      for (final doc in snap.docs) {
+        final emps = List<String>.from(doc.data()['employees'] ?? []);
+        if (emps.contains(employeeName)) {
+          emps.remove(employeeName);
+          await firestore.collection('shops').doc(doc.id).update({
+            'employees': emps,
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('❌ Error cleaning employee from shops: $e');
+    }
+  }
+
   Future<void> requestSaleEdit(
     int saleId,
     String reason,
@@ -129,15 +179,20 @@ class AppDataProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> updateSaleAmount(String saleId, double newAmount) async {
-    final index = _sales.indexWhere((s) => s['id'] == saleId);
-    if (index != -1) {
-      _sales[index]['amount'] = newAmount;
-      notifyListeners();
-
+  Future<void> updateSaleAmount(
+    String saleId,
+    double newAmount,
+    String reason,
+  ) async {
+    try {
       await FirebaseFirestore.instance.collection('sales').doc(saleId).update({
-        'amount': newAmount,
+        'total': newAmount,
+        'editReason': reason,
+        'editedAt': Timestamp.now(),
       });
+      await fetchSales(); // to refresh the local _sales list
+    } catch (e) {
+      debugPrint('Error updating sale: $e');
     }
   }
 
@@ -171,26 +226,85 @@ class AppDataProvider extends ChangeNotifier {
   //       notifyListeners();
   //     }
   //   }
+  Future<void> fetchEmployees() async {
+    final snapshot = await FirebaseFirestore.instance
+        .collection('employees')
+        .get();
+    employees = snapshot.docs
+        .map((doc) => {'uid': doc.id, ...doc.data() as Map<String, dynamic>})
+        .toList();
+    notifyListeners();
+  }
 
-  Future<void> deleteShopByName(String name) async {
+  Future<void> deleteShopByName(String shopName) async {
     try {
-      final shopDoc = await FirebaseFirestore.instance
+      final shopDoc = await firestore
           .collection('shops')
-          .where('name', isEqualTo: name)
+          .where('name', isEqualTo: shopName)
           .limit(1)
           .get();
 
-      if (shopDoc.docs.isNotEmpty) {
-        await shopDoc.docs.first.reference.update({
-          'isDeleted': true,
-          'deletedAt': Timestamp.now(),
-        });
+      if (shopDoc.docs.isEmpty) return;
+
+      final shopId = shopDoc.docs.first.id;
+
+      // Soft delete the shop
+      await firestore.collection('shops').doc(shopId).update({
+        'isDeleted': true,
+      });
+
+      // Remove this shop from all employees' assignedShops
+      final employeesSnapshot = await firestore.collection('employees').get();
+
+      for (var doc in employeesSnapshot.docs) {
+        final data = doc.data();
+        final assignedShops = List<String>.from(data['assignedShops'] ?? []);
+
+        if (assignedShops.contains(shopName)) {
+          assignedShops.remove(shopName);
+
+          await firestore.collection('employees').doc(doc.id).update({
+            'assignedShops': assignedShops,
+          });
+        }
       }
 
-      shops.removeWhere((shop) => shop['name'] == name);
+      await fetchShops(); // Update local cache
+      await fetchEmployees(); // To update removed shop assignments
+
       notifyListeners();
     } catch (e) {
-      debugPrint('Error soft deleting shop: $e');
+      print("Error deleting shop: $e");
+    }
+  }
+
+  Future<void> deleteEmployeeById(String uid, String name) async {
+    try {
+      // Delete employee from 'employees' collection
+      await firestore.collection('employees').doc(uid).delete();
+
+      // Also delete from 'users' collection
+      await firestore.collection('users').doc(uid).delete();
+
+      // Remove this employee's name from all shops' employees list
+      final shopsSnapshot = await firestore.collection('shops').get();
+      for (var doc in shopsSnapshot.docs) {
+        final data = doc.data();
+        final employees = List<String>.from(data['employees'] ?? []);
+
+        if (employees.contains(name)) {
+          employees.remove(name);
+          await firestore.collection('shops').doc(doc.id).update({
+            'employees': employees,
+          });
+        }
+      }
+
+      await fetchShops();
+      await fetchEmployees();
+      notifyListeners();
+    } catch (e) {
+      print("Error deleting employee: $e");
     }
   }
 
@@ -410,10 +524,13 @@ class AppDataProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> deleteSale(String id) async {
-    _sales.removeWhere((s) => s['id'] == id);
-    notifyListeners();
-    await FirebaseFirestore.instance.collection('sales').doc(id).delete();
+  Future<void> deleteSale(String saleId) async {
+    try {
+      await FirebaseFirestore.instance.collection('sales').doc(saleId).delete();
+      await fetchSales(); // to refresh list after delete
+    } catch (e) {
+      debugPrint('Error deleting sale: $e');
+    }
   }
 
   List<Map<String, dynamic>> getEmployeeSales(String employeeName) {
@@ -562,26 +679,27 @@ class AppDataProvider extends ChangeNotifier {
       _sales.addAll(
         snapshot.docs.map((doc) {
           final data = doc.data();
-          final rawCreatedAt = data['createdAt'];
-          DateTime? createdAt;
+          final rawDate = data['createdAt'];
+          DateTime? saleDate;
 
-          if (rawCreatedAt is Timestamp) {
-            createdAt = rawCreatedAt.toDate();
-          } else if (rawCreatedAt is DateTime) {
-            createdAt = rawCreatedAt;
-          } else if (rawCreatedAt is String) {
-            createdAt = DateTime.tryParse(rawCreatedAt);
+          if (rawDate is Timestamp) {
+            saleDate = rawDate.toDate();
+          } else if (rawDate is String) {
+            saleDate = DateTime.tryParse(rawDate);
           }
 
           return {
             'id': doc.id,
             'shop': data['shop'] ?? '',
             'employee': data['employee'] ?? '',
-            'cash': (data['cash'] ?? 0) * 1.0,
-            'card': (data['card'] ?? 0) * 1.0,
-            'other': (data['other'] ?? 0) * 1.0,
-            'total': (data['total'] ?? 0) * 1.0,
-            'createdAt': createdAt,
+            'cash': (data['cash'] ?? 0).toDouble(),
+            'card': (data['card'] ?? 0).toDouble(),
+            'other': (data['other'] ?? 0).toDouble(),
+            'total': (data['total'] ?? 0).toDouble(),
+            'saleDate': saleDate != null
+                ? DateFormat('yyyy-MM-dd').format(saleDate)
+                : '',
+            'createdAt': saleDate,
           };
         }),
       );
@@ -612,6 +730,95 @@ class AppDataProvider extends ChangeNotifier {
     await fetchSales();
     await fetchEditRequests(); // fetches editRequests from Firebase
     notifyListeners();
+  }
+
+  Future<void> updateShopAssignments({
+    required String userId,
+    required String userName,
+    required List<String> newAssignedShops,
+  }) async {
+    try {
+      final employeeDoc = await firestore
+          .collection('employees')
+          .doc(userId)
+          .get();
+      final oldAssignedShops = List<String>.from(
+        employeeDoc.data()?['assignedShops'] ?? [],
+      );
+
+      // Step 1: Remove employee from shops they are unassigned from
+      for (final oldShop in oldAssignedShops) {
+        if (!newAssignedShops.contains(oldShop)) {
+          final query = await firestore
+              .collection('shops')
+              .where('name', isEqualTo: oldShop)
+              .limit(1)
+              .get();
+
+          if (query.docs.isNotEmpty) {
+            final shopDoc = query.docs.first;
+            final List<dynamic> currentEmployees = List.from(
+              shopDoc['employees'] ?? [],
+            );
+            currentEmployees.remove(userName);
+
+            await firestore.collection('shops').doc(shopDoc.id).update({
+              'employees': currentEmployees,
+              'updatedAt': DateTime.now(),
+            });
+          }
+        }
+      }
+
+      // Step 2: Add employee to newly assigned shops
+      for (final newShop in newAssignedShops) {
+        if (!oldAssignedShops.contains(newShop)) {
+          final query = await firestore
+              .collection('shops')
+              .where('name', isEqualTo: newShop)
+              .limit(1)
+              .get();
+
+          if (query.docs.isNotEmpty) {
+            final shopDoc = query.docs.first;
+            final List<dynamic> currentEmployees = List.from(
+              shopDoc['employees'] ?? [],
+            );
+            if (!currentEmployees.contains(userName)) {
+              currentEmployees.add(userName);
+            }
+
+            await firestore.collection('shops').doc(shopDoc.id).update({
+              'employees': currentEmployees,
+              'updatedAt': DateTime.now(),
+            });
+          }
+        }
+      }
+
+      // Step 3: Update employee and user documents with new shop list
+      await firestore.collection('employees').doc(userId).update({
+        'assignedShops': newAssignedShops,
+        'updatedAt': DateTime.now(),
+      });
+
+      final userDoc = await firestore
+          .collection('users')
+          .where('name', isEqualTo: userName)
+          .limit(1)
+          .get();
+
+      if (userDoc.docs.isNotEmpty) {
+        await firestore.collection('users').doc(userDoc.docs.first.id).update({
+          'assignedShops': newAssignedShops,
+          'updatedAt': DateTime.now(),
+        });
+      }
+
+      notifyListeners();
+    } catch (e) {
+      debugPrint('❌ Error updating assignments: $e');
+    }
   }
 
   void startFirebaseListeners() {

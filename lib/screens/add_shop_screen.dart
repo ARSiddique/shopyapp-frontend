@@ -38,6 +38,7 @@ class _AddShopScreenState extends State<AddShopScreen> {
       'isOpen': _isOpen,
       'isDeleted': false,
       'updatedAt': DateTime.now(),
+      'employees': [], // ✅ Prevents crash in ShopCard etc.
     };
 
     try {

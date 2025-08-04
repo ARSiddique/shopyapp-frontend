@@ -1,115 +1,167 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_data_provider.dart';
 import 'add_employee_and_access_screen.dart';
-import 'assignment_history_screen.dart';
 
 class EmployeesOverviewScreen extends StatelessWidget {
   const EmployeesOverviewScreen({super.key});
 
+  void _confirmDeleteEmployee(
+    BuildContext context,
+    Map<String, dynamic> employee,
+  ) async {
+    // 🛑 Prevent deleting Admin
+    if ((employee['role'] ?? '') == 'admin') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("You cannot delete an Admin"),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Confirm Delete"),
+        content: Text("Are you sure you want to delete ${employee['name']}?"),
+        actions: [
+          TextButton(
+            child: const Text("Cancel"),
+            onPressed: () => Navigator.pop(ctx, false),
+          ),
+          TextButton(
+            child: const Text("Delete", style: TextStyle(color: Colors.red)),
+            onPressed: () => Navigator.pop(ctx, true),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    try {
+      final uid = employee['uid'];
+      await FirebaseFirestore.instance
+          .collection('employees')
+          .doc(uid)
+          .delete();
+      await FirebaseFirestore.instance.collection('users').doc(uid).delete();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${employee['name']} deleted successfully')),
+      );
+
+      // 🔁 Optionally refresh employees after delete
+      await Provider.of<AppDataProvider>(
+        context,
+        listen: false,
+      ).fetchEmployees();
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error deleting employee: $e')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final appData = Provider.of<AppDataProvider>(context);
-    final employees = appData.employees;
-    final user = appData.loggedInUser ?? {};
-    final isAdmin = user['role'] == 'admin';
-    final isManager = user['role'] == 'manager';
-    final userId = user['id'];
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('All Employees'),
+        title: const Text('Employees'),
         backgroundColor: Colors.deepPurple,
         actions: [
-          if (isAdmin || isManager)
-            IconButton(
-              icon: const Icon(Icons.person_add),
-              tooltip: 'Add Employee',
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const AddEmployeeAndAccessScreen(),
-                  ),
-                );
-              },
-            ),
+          IconButton(
+            icon: const Icon(Icons.person_add),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const AddEmployeeAndAccessScreen(),
+                ),
+              );
+            },
+          ),
         ],
       ),
-      body: employees.isEmpty
-          ? const Center(child: Text('No employees found'))
-          : ListView.builder(
-              itemCount: employees.length,
-              padding: const EdgeInsets.all(12),
-              itemBuilder: (context, index) {
-                final emp = employees[index];
-                final assignedShops = emp['assignedShops'] ?? [];
-                final isSelf = emp['id'] == userId;
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance.collection('employees').snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
 
-                return Card(
-                  elevation: 3,
-                  margin: const EdgeInsets.symmetric(vertical: 8),
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          emp['name'] ?? 'N/A',
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text('Phone: ${emp['phone'] ?? 'N/A'}'),
-                        Text('Email: ${emp['email'] ?? 'N/A'}'),
-                        Text('Role: ${emp['role']}'),
-                        if (assignedShops.isNotEmpty)
-                          Text('Shops: ${assignedShops.join(', ')}'),
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            ElevatedButton.icon(
-                              icon: const Icon(Icons.edit),
-                              label: Text(isSelf ? 'Edit Self' : 'Edit'),
-                              onPressed: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => AddEmployeeAndAccessScreen(
-                                      existingEmployee: emp,
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                            const SizedBox(width: 12),
-                            ElevatedButton.icon(
-                              icon: const Icon(Icons.history),
-                              label: const Text('History'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.teal,
-                              ),
-                              onPressed: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => AssignmentHistoryScreen(
-                                      employeeId: emp['id'],
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
+          final docs = snapshot.data?.docs ?? [];
+
+          if (docs.isEmpty)
+            return const Center(child: Text('No employees found.'));
+
+          return ListView.builder(
+            itemCount: docs.length,
+            itemBuilder: (context, index) {
+              final data = docs[index].data() as Map<String, dynamic>;
+
+              return Card(
+                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                child: ListTile(
+                  title: Text(data['name'] ?? 'No Name'),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Role: ${data['role']}'),
+                      Text('Email: ${data['email']}'),
+                      Text(
+                        'Assigned Shops: ${(data['assignedShops'] as List<dynamic>?)?.join(', ') ?? 'None'}',
+                      ),
+                    ],
                   ),
-                );
-              },
-            ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.edit, color: Colors.blue),
+                        onPressed: () async {
+                          final result = await Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => AddEmployeeAndAccessScreen(
+                                existingEmployee: data,
+                              ),
+                            ),
+                          );
+
+                          if (result != null &&
+                              result is Map<String, dynamic> &&
+                              result.containsKey('assignedShops')) {
+                            await Provider.of<AppDataProvider>(
+                              context,
+                              listen: false,
+                            ).updateShopAssignments(
+                              userId: data['uid'],
+                              userName: data['name'],
+                              newAssignedShops: List<String>.from(
+                                result['assignedShops'],
+                              ),
+                            );
+                          }
+                        },
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.delete, color: Colors.red),
+                        onPressed: () => _confirmDeleteEmployee(context, data),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
     );
   }
 }
