@@ -1,5 +1,3 @@
-// ✅ FINAL POLISHED VERSION OF SalesScreen WITH EXPORT + EDIT + DELETE + ROLE SUPPORT
-
 import 'dart:io';
 import 'package:csv/csv.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -10,7 +8,6 @@ import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../providers/app_data_provider.dart';
 import 'add_sale_screen.dart';
-// import '../widgets/edit_sale_modal.dart';
 
 class SalesScreen extends StatefulWidget {
   const SalesScreen({super.key});
@@ -20,16 +17,15 @@ class SalesScreen extends StatefulWidget {
 }
 
 class _SalesScreenState extends State<SalesScreen> {
-  bool _mounted = false;
-
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _mounted = true;
     Provider.of<AppDataProvider>(context, listen: false).fetchSales();
   }
 
   Future<Directory?> _getDownloadDirectory() async {
+    final contextOwner = context;
+
     if (Platform.isAndroid) {
       if (await Permission.manageExternalStorage.request().isGranted ||
           await Permission.storage.request().isGranted) {
@@ -40,7 +36,8 @@ class _SalesScreenState extends State<SalesScreen> {
           return await getExternalStorageDirectory(); // fallback
         }
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
+        if (!contextOwner.mounted) return null;
+        ScaffoldMessenger.of(contextOwner).showSnackBar(
           const SnackBar(content: Text('Storage permission denied')),
         );
         return null;
@@ -51,8 +48,14 @@ class _SalesScreenState extends State<SalesScreen> {
   }
 
   Future<void> _deleteSale(String saleId) async {
+    final contextOwner = context; // ✅ Capture early
+    final appData = Provider.of<AppDataProvider>(
+      contextOwner,
+      listen: false,
+    ); // ✅ Before await
+
     final confirm = await showDialog<bool>(
-      context: context,
+      context: contextOwner,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete Sale?'),
         content: const Text('Are you sure you want to delete this sale?'),
@@ -68,14 +71,18 @@ class _SalesScreenState extends State<SalesScreen> {
         ],
       ),
     );
+
     if (confirm != true) return;
 
-    final appData = Provider.of<AppDataProvider>(context, listen: false);
     await appData.deleteSale(saleId);
-    if (_mounted && context.mounted) {
-      await appData.fetchSales();
-      setState(() {});
-    }
+
+    if (!contextOwner.mounted) return;
+
+    await appData.fetchSales();
+
+    if (!contextOwner.mounted) return;
+
+    setState(() {});
   }
 
   void _openEditSale(Map<String, dynamic> sale) {
@@ -86,6 +93,8 @@ class _SalesScreenState extends State<SalesScreen> {
   }
 
   Future<void> exportCSV(List<Map<String, dynamic>> sales) async {
+    final contextOwner = context;
+
     final csvData = [
       [
         'Date',
@@ -114,17 +123,19 @@ class _SalesScreenState extends State<SalesScreen> {
 
     final csv = const ListToCsvConverter().convert(csvData);
     final directory = await _getDownloadDirectory();
-    if (directory == null) return;
+    if (directory == null || !contextOwner.mounted) return;
     final path = '${directory.path}/sales_report.csv';
     final file = File(path);
     await file.writeAsString(csv);
-    if (!_mounted || !context.mounted) return;
+    if (!contextOwner.mounted) return;
     ScaffoldMessenger.of(
-      context,
+      contextOwner,
     ).showSnackBar(SnackBar(content: Text('CSV exported to: $path')));
   }
 
   Future<void> exportPDF(List<Map<String, dynamic>> sales) async {
+    final contextOwner = context;
+
     final pdf = pw.Document();
     final headers = [
       'Date',
@@ -161,12 +172,12 @@ class _SalesScreenState extends State<SalesScreen> {
     );
 
     final directory = await _getDownloadDirectory();
-    if (directory == null) return;
+    if (directory == null || !contextOwner.mounted) return;
     final file = File('${directory.path}/sales_report.pdf');
     await file.writeAsBytes(await pdf.save());
-    if (!_mounted || !context.mounted) return;
+    if (!contextOwner.mounted) return;
     ScaffoldMessenger.of(
-      context,
+      contextOwner,
     ).showSnackBar(SnackBar(content: Text('PDF exported to: ${file.path}')));
   }
 
@@ -178,10 +189,11 @@ class _SalesScreenState extends State<SalesScreen> {
     final isEmployee = role == 'employee';
 
     if (isEmployee) {
+      final contextOwner = context;
       Future.delayed(Duration.zero, () {
-        if (!_mounted || !context.mounted) return;
+        if (!contextOwner.mounted) return;
         Navigator.pushReplacement(
-          context,
+          contextOwner,
           MaterialPageRoute(builder: (_) => const AddSaleScreen()),
         );
       });
@@ -327,11 +339,5 @@ class _SalesScreenState extends State<SalesScreen> {
               ],
             ),
     );
-  }
-
-  @override
-  void dispose() {
-    _mounted = false;
-    super.dispose();
   }
 }
