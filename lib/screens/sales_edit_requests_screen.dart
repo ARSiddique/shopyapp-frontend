@@ -61,11 +61,12 @@ class _SalesEditRequestsScreenState extends State<SalesEditRequestsScreen> {
                                 backgroundColor: Colors.green,
                               ),
                               onPressed: () async {
+                                final contextOwner = context; // ✅ Safe
                                 setState(() => _isProcessing = true);
                                 await appData.approveSaleEdit(requestId);
                                 setState(() => _isProcessing = false);
-                                if (!mounted) return;
-                                ScaffoldMessenger.of(context).showSnackBar(
+                                if (!contextOwner.mounted) return;
+                                ScaffoldMessenger.of(contextOwner).showSnackBar(
                                   const SnackBar(
                                     content: Text('Request approved'),
                                   ),
@@ -80,11 +81,12 @@ class _SalesEditRequestsScreenState extends State<SalesEditRequestsScreen> {
                                 backgroundColor: Colors.red,
                               ),
                               onPressed: () async {
+                                final contextOwner = context; // ✅ Safe
                                 setState(() => _isProcessing = true);
                                 await appData.rejectSaleEdit(requestId);
                                 setState(() => _isProcessing = false);
-                                if (!mounted) return;
-                                ScaffoldMessenger.of(context).showSnackBar(
+                                if (!contextOwner.mounted) return;
+                                ScaffoldMessenger.of(contextOwner).showSnackBar(
                                   const SnackBar(
                                     content: Text('Request rejected'),
                                   ),
