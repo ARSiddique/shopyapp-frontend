@@ -31,7 +31,7 @@ class _AddOrderScreenState extends State<AddOrderScreen> {
               .map<String>((s) => s['name'].toString())
               .toList();
 
-    // If employee, auto-select their first assigned shop
+    // Auto-select employee's shop
     if (isEmployee && assignedShops.isNotEmpty && _selectedShop == null) {
       _selectedShop = assignedShops.first;
     }
@@ -52,7 +52,6 @@ class _AddOrderScreenState extends State<AddOrderScreen> {
           key: _formKey,
           child: Column(
             children: [
-              // Shop selection only for admin/manager
               if (!isEmployee)
                 DropdownButtonFormField<String>(
                   value: _selectedShop,
@@ -70,10 +69,9 @@ class _AddOrderScreenState extends State<AddOrderScreen> {
                   validator: (val) =>
                       val == null ? 'Please select a shop' : null,
                 ),
-
               if (!isEmployee) const SizedBox(height: 16),
 
-              // Wholesaler Name
+              // Wholesaler name
               TextFormField(
                 decoration: const InputDecoration(
                   labelText: 'Wholesaler Name',
@@ -86,9 +84,11 @@ class _AddOrderScreenState extends State<AddOrderScreen> {
               ),
               const SizedBox(height: 16),
 
-              // Order Amount
+              // Order amount
               TextFormField(
-                keyboardType: TextInputType.numberWithOptions(decimal: true),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
                 decoration: const InputDecoration(
                   labelText: 'Order Amount',
                   border: OutlineInputBorder(),
@@ -103,7 +103,7 @@ class _AddOrderScreenState extends State<AddOrderScreen> {
               ),
               const SizedBox(height: 24),
 
-              // Submit Button
+              // Submit button
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
@@ -119,6 +119,14 @@ class _AddOrderScreenState extends State<AddOrderScreen> {
                   onPressed: isFormValid && !_isSubmitting
                       ? () async {
                           if (!_formKey.currentState!.validate()) return;
+
+                          final contextOwner =
+                              context; // ✅ capture before async
+                          final appDataOwner = Provider.of<AppDataProvider>(
+                            contextOwner,
+                            listen: false,
+                          );
+
                           setState(() => _isSubmitting = true);
 
                           try {
@@ -136,23 +144,27 @@ class _AddOrderScreenState extends State<AddOrderScreen> {
                                 .add(newOrder);
 
                             newOrder['id'] = docRef.id;
-                            appData.addOrder(newOrder);
+                            appDataOwner.addOrder(newOrder);
 
-                            if (mounted) {
-                              Navigator.pop(context);
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Order submitted successfully'),
-                                ),
-                              );
-                            }
+                            // ✅ SAFEST WAY TO CHECK CONTEXT
+                            if (!contextOwner.mounted) return;
+
+                            Navigator.pop(contextOwner);
+                            ScaffoldMessenger.of(contextOwner).showSnackBar(
+                              const SnackBar(
+                                content: Text('Order submitted successfully'),
+                              ),
+                            );
                           } catch (e) {
-                            ScaffoldMessenger.of(context).showSnackBar(
+                            if (!contextOwner.mounted) return;
+                            ScaffoldMessenger.of(contextOwner).showSnackBar(
                               SnackBar(content: Text('Error: $e')),
                             );
                           }
 
-                          if (mounted) setState(() => _isSubmitting = false);
+                          if (mounted) {
+                            setState(() => _isSubmitting = false);
+                          }
                         }
                       : null,
                 ),
