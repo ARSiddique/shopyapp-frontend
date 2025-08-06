@@ -5,13 +5,9 @@ import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../providers/app_data_provider.dart';
 import '../widgets/summary_card.dart';
-// import '../widgets/quick_action_button.dart';
 import '../widgets/shop_card.dart';
-// import '../screens/add_order_screen.dart';
 import '../screens/add_sale_screen.dart';
-// import '../screens/reports_screen.dart';
 import '../screens/add_shop_screen.dart';
-// import '../screens/add_employee_and_access_screen.dart';
 import '../screens/orders_screen.dart';
 import '../screens/sales_screen.dart';
 import '../screens/profile_screen.dart';
@@ -21,12 +17,8 @@ import '../screens/shop_detail_screen.dart';
 import '../screens/employees_overview_screen.dart';
 import 'package:intl/intl.dart';
 
-/// Shows a confirmation dialog before logging out.
 void showPlatformLogoutDialog(BuildContext context) {
   final appData = Provider.of<AppDataProvider>(context, listen: false);
-  // final activeShops = appData.shops
-  //     .where((shop) => shop['isDeleted'] != true)
-  //     .toList();
   if (Platform.isIOS) {
     showCupertinoDialog(
       context: context,
@@ -141,43 +133,12 @@ class _HomeScreenState extends State<HomeScreen> {
     final appData = Provider.of<AppDataProvider>(context, listen: false);
     appData.startFirebaseListeners();
   }
-  //  String _getAppBarTitle(int index, String name, String role) {
-  //     switch (index) {
-  //       case 0:
-  //         return '$name (${role[0].toUpperCase()}${role.substring(1)})'; // Home
-  //       case 1:
-  //         return 'Orders';
-  //       case 2:
-  //         return 'Sales';
-  //       case 3:
-  //         return 'Profile & Settings';
-  //       default:
-  //         return '';
-  //     }
-  //   }
 
   @override
   Widget build(BuildContext context) {
     final appData = Provider.of<AppDataProvider>(context);
     final user = appData.loggedInUser ?? {};
     final role = user['role'] ?? 'employee';
-    final isAdmin = role == 'admin';
-    final isManager = role == 'manager';
-    final isEmployee = role == 'employee';
-    final userId = user['uid'] ?? '';
-
-    final todayDate = DateFormat('yyyy-MM-dd').format(DateTime.now());
-    final assignedShops = appData.getAssignedShopsForUser(userId);
-
-    // Calculate today's sales count for employee's assigned shops
-    int todaySalesCount = 0;
-    if (isEmployee) {
-      todaySalesCount = appData.sales.where((sale) {
-        final saleDate = sale['saleDate'];
-        final shopName = sale['shop'];
-        return saleDate == todayDate && assignedShops.contains(shopName);
-      }).length;
-    }
 
     final pages = <Widget>[
       const HomeDashboard(),
@@ -186,21 +147,6 @@ class _HomeScreenState extends State<HomeScreen> {
         const OrdersScreen(),
       if (role == 'admin' || role == 'manager') const SalesScreen(),
     ];
-
-    // final navItems = <BottomNavigationBarItem>[
-    //   const BottomNavigationBarItem(icon: Icon(Icons.dashboard), label: 'Home'),
-    //   if (role == 'admin' || role == 'manager' || role == 'employee')
-    //     const BottomNavigationBarItem(
-    //       icon: Icon(Icons.receipt),
-    //       label: 'Orders',
-    //     ),
-    //   if (role == 'admin' || role == 'manager')
-    //     const BottomNavigationBarItem(
-    //       icon: Icon(Icons.attach_money),
-    //       label: 'Sales',
-    //     ),
-    //   const BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
-    // ];
 
     return PopScope(
       canPop: true,
@@ -261,10 +207,6 @@ class HomeDashboard extends StatelessWidget {
     final employeeOrders = appData.orders
         .where((order) => order['employee'] == employeeName)
         .toList();
-    final employeeSales = appData.sales
-        .where((sale) => sale['employee'] == employeeName)
-        .toList();
-
     // ✅ Add this block here:
     final todayDate = DateFormat('yyyy-MM-dd').format(DateTime.now());
     final assignedShops = (user['assignedShops'] ?? [])
@@ -284,15 +226,11 @@ class HomeDashboard extends StatelessWidget {
         }
 
         final shops = snapshot.data?.docs ?? [];
-        // final activeShops = shops
-        //     .where((shop) => shop['isDeleted'] != true)
-        //     .toList();
-
         final assignedShops = (user['assignedShops'] ?? [])
             .map<String>((s) => s.toString())
             .toList();
 
-        ('ROLE: $role');
+        debugPrint('ROLE: $role');
         debugPrint('Assigned Shops: $assignedShops');
         for (var doc in shops) {
           debugPrint('Shop: ${doc['name']}');
@@ -399,100 +337,6 @@ class HomeDashboard extends StatelessWidget {
                   ],
                 ),
 
-                // const SizedBox(height: 24),
-                // const Text(
-                //   "Quick Actions",
-                //   style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                // ),
-                // const SizedBox(height: 12),
-                // Wrap(
-                //   spacing: 20,
-                //   runSpacing: 20,
-                //   children: [
-                //     if (role == 'admin' ||
-                //         role == 'manager' ||
-                //         role == 'employee')
-                //       QuickActionButton(
-                //         icon: Icons.add_shopping_cart,
-                //         label: "Add Order",
-                //         onTap: () {
-                //           Navigator.push(
-                //             context,
-                //             MaterialPageRoute(
-                //               builder: (_) => const AddOrderScreen(),
-                //             ),
-                //           );
-                //         },
-                //       ),
-                //     if (role == 'admin' ||
-                //         role == 'manager' ||
-                //         role == 'employee')
-                //       QuickActionButton(
-                //         icon: Icons.attach_money,
-                //         label: "Add Sale",
-                //         onTap: () {
-                //           Navigator.push(
-                //             context,
-                //             MaterialPageRoute(
-                //               builder: (_) => const AddSaleScreen(),
-                //             ),
-                //           );
-                //         },
-                //       ),
-                //     if (role == 'admin' || role == 'manager')
-                //       QuickActionButton(
-                //         icon: Icons.bar_chart,
-                //         label: "Reports",
-                //         onTap: () {
-                //           Navigator.push(
-                //             context,
-                //             MaterialPageRoute(
-                //               builder: (_) => const ReportsScreen(),
-                //             ),
-                //           );
-                //         },
-                //       ),
-                //     if (role == 'admin' || role == 'manager')
-                //       QuickActionButton(
-                //         icon: Icons.add_business,
-                //         label: "Add Shop",
-                //         onTap: () {
-                //           Navigator.push(
-                //             context,
-                //             MaterialPageRoute(
-                //               builder: (_) => const AddShopScreen(),
-                //             ),
-                //           );
-                //         },
-                //       ),
-                //     if (role == 'admin' || role == 'manager')
-                //       QuickActionButton(
-                //         icon: Icons.person_add_alt_1,
-                //         label: "Add Employee + Access",
-                //         onTap: () {
-                //           Navigator.push(
-                //             context,
-                //             MaterialPageRoute(
-                //               builder: (_) =>
-                //                   const AddEmployeeAndAccessScreen(),
-                //             ),
-                //           );
-                //         },
-                //       ),
-                //     QuickActionButton(
-                //       icon: Icons.receipt_long,
-                //       label: role == 'employee' ? "My Orders" : "Manage Orders",
-                //       onTap: () {
-                //         Navigator.push(
-                //           context,
-                //           MaterialPageRoute(
-                //             builder: (_) => const OrdersScreen(),
-                //           ),
-                //         );
-                //       },
-                //     ),
-                //   ],
-                // ),
                 const SizedBox(height: 32),
                 const Text(
                   "Shops Overview",
