@@ -4,15 +4,18 @@ import 'package:provider/provider.dart';
 import '../providers/app_data_provider.dart';
 import 'add_employee_and_access_screen.dart';
 
-class EmployeesOverviewScreen extends StatelessWidget {
+class EmployeesOverviewScreen extends StatefulWidget {
   const EmployeesOverviewScreen({super.key});
 
-  void _confirmDeleteEmployee(
-    BuildContext context,
-    Map<String, dynamic> employee,
-  ) async {
-    // 🛑 Prevent deleting Admin
+  @override
+  State<EmployeesOverviewScreen> createState() =>
+      _EmployeesOverviewScreenState();
+}
+
+class _EmployeesOverviewScreenState extends State<EmployeesOverviewScreen> {
+  Future<void> _confirmDeleteEmployee(Map<String, dynamic> employee) async {
     if ((employee['role'] ?? '') == 'admin') {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text("You cannot delete an Admin"),
@@ -50,16 +53,18 @@ class EmployeesOverviewScreen extends StatelessWidget {
           .delete();
       await FirebaseFirestore.instance.collection('users').doc(uid).delete();
 
+      if (!mounted) return;
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('${employee['name']} deleted successfully')),
       );
 
-      // 🔁 Optionally refresh employees after delete
       await Provider.of<AppDataProvider>(
         context,
         listen: false,
       ).fetchEmployees();
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Error deleting employee: $e')));
@@ -68,8 +73,6 @@ class EmployeesOverviewScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final appData = Provider.of<AppDataProvider>(context);
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Employees'),
@@ -97,13 +100,16 @@ class EmployeesOverviewScreen extends StatelessWidget {
 
           final docs = snapshot.data?.docs ?? [];
 
-          if (docs.isEmpty)
+          if (docs.isEmpty) {
             return const Center(child: Text('No employees found.'));
+          }
 
           return ListView.builder(
             itemCount: docs.length,
             itemBuilder: (context, index) {
-              final data = docs[index].data() as Map<String, dynamic>;
+              final raw = docs[index].data();
+              if (raw is! Map<String, dynamic>) return const SizedBox();
+              final data = raw;
 
               return Card(
                 margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -112,10 +118,10 @@ class EmployeesOverviewScreen extends StatelessWidget {
                   subtitle: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Role: ${data['role']}'),
-                      Text('Email: ${data['email']}'),
+                      Text('Role: ${data['role'] ?? 'N/A'}'),
+                      Text('Email: ${data['email'] ?? 'N/A'}'),
                       Text(
-                        'Assigned Shops: ${(data['assignedShops'] as List<dynamic>?)?.join(', ') ?? 'None'}',
+                        'Assigned Shops: ${((data['assignedShops'] ?? []) as List).join(', ')}',
                       ),
                     ],
                   ),
@@ -125,6 +131,12 @@ class EmployeesOverviewScreen extends StatelessWidget {
                       IconButton(
                         icon: const Icon(Icons.edit, color: Colors.blue),
                         onPressed: () async {
+                          // ✅ Move Provider call BEFORE await
+                          final appData = Provider.of<AppDataProvider>(
+                            context,
+                            listen: false,
+                          );
+
                           final result = await Navigator.push(
                             context,
                             MaterialPageRoute(
@@ -134,13 +146,12 @@ class EmployeesOverviewScreen extends StatelessWidget {
                             ),
                           );
 
+                          if (!mounted) return;
+
                           if (result != null &&
                               result is Map<String, dynamic> &&
                               result.containsKey('assignedShops')) {
-                            await Provider.of<AppDataProvider>(
-                              context,
-                              listen: false,
-                            ).updateShopAssignments(
+                            await appData.updateShopAssignments(
                               userId: data['uid'],
                               userName: data['name'],
                               newAssignedShops: List<String>.from(
@@ -152,7 +163,7 @@ class EmployeesOverviewScreen extends StatelessWidget {
                       ),
                       IconButton(
                         icon: const Icon(Icons.delete, color: Colors.red),
-                        onPressed: () => _confirmDeleteEmployee(context, data),
+                        onPressed: () => _confirmDeleteEmployee(data),
                       ),
                     ],
                   ),

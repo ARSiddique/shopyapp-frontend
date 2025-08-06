@@ -86,7 +86,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         Provider.of<AppDataProvider>(context, listen: false).loggedInUser ?? {};
     _emailController = TextEditingController(text: user['email'] ?? '');
     _phoneController = TextEditingController(text: user['phone'] ?? '');
-    _passwordController = TextEditingController(text: user['password'] ?? '');
+    _passwordController = TextEditingController();
   }
 
   @override
