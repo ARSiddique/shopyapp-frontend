@@ -1,20 +1,23 @@
-// ✅ FINAL POLISHED VERSION OF AddSaleScreen WITH ADD + EDIT SUPPORT
-
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_data_provider.dart';
 import 'package:intl/intl.dart';
+import 'shop_selection_screen.dart';
+import 'login_screen.dart';
 
 class AddSaleScreen extends StatefulWidget {
   final Map<String, dynamic>? existingSale;
-  const AddSaleScreen({super.key, this.existingSale});
+  final String? selectedShopId;
+
+  const AddSaleScreen({super.key, this.existingSale, this.selectedShopId});
 
   @override
   State<AddSaleScreen> createState() => _AddSaleScreenState();
 }
 
 class _AddSaleScreenState extends State<AddSaleScreen> {
+  bool _isShopPreselected = false;
   final _formKey = GlobalKey<FormState>();
   String? _selectedShop;
   DateTime _selectedDate = DateTime.now();
@@ -39,6 +42,9 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
       if (sale['saleDate'] != null) {
         _selectedDate = DateFormat('yyyy-MM-dd').parse(sale['saleDate']);
       }
+    } else if (widget.selectedShopId != null) {
+      _selectedShop = widget.selectedShopId;
+      _isShopPreselected = true;
     }
   }
 
@@ -148,8 +154,33 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(_isEditMode ? 'Edit Sale' : 'Add Sale'),
-        backgroundColor: Colors.deepPurple,
+        actions: [
+          PopupMenuButton<String>(
+            onSelected: (value) {
+              if (value == 'switch') {
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const ShopSelectionScreen(),
+                  ),
+                );
+              } else if (value == 'logout') {
+                Provider.of<AppDataProvider>(context, listen: false).logout();
+                Navigator.pushAndRemoveUntil(
+                  context,
+                  MaterialPageRoute(builder: (_) => const LoginScreen()),
+                  (_) => false,
+                );
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(value: 'switch', child: Text('Switch Shop')),
+              const PopupMenuItem(value: 'logout', child: Text('Logout')),
+            ],
+          ),
+        ],
       ),
+
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Form(
@@ -168,7 +199,9 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
                         ),
                       )
                       .toList(),
-                  onChanged: (val) => setState(() => _selectedShop = val),
+                  onChanged: _isShopPreselected
+                      ? null
+                      : (val) => setState(() => _selectedShop = val),
                   decoration: const InputDecoration(
                     border: OutlineInputBorder(),
                   ),

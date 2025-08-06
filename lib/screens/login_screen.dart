@@ -8,6 +8,8 @@ import 'package:provider/provider.dart';
 
 import '../providers/app_data_provider.dart';
 import 'home_screen.dart';
+import 'add_sale_screen.dart';
+import 'shop_selection_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -32,39 +34,49 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _handleLogin() async {
     FocusScope.of(context).unfocus();
-    final email = _emailController.text.trim().toLowerCase();
-    final password = _passwordController.text.trim();
+    setState(() => _isLoading = true);
 
-    if (email.isEmpty || password.isEmpty) {
-      setState(() {
-        _error = 'Please enter both email and password.';
-      });
-      return;
-    }
-
-    setState(() {
-      _isLoading = true;
-      _error = null;
-    });
-
-    final success = await Provider.of<AppDataProvider>(
-      context,
-      listen: false,
-    ).loginWithEmailAndPassword(email, password);
-
-    if (!mounted) return;
+    final success = await Provider.of<AppDataProvider>(context, listen: false)
+        .loginWithNameAndCode(
+          _emailController.text.trim(),
+          _passwordController.text.trim(),
+        );
 
     setState(() => _isLoading = false);
 
-    if (success) {
+    if (!mounted) return;
+
+    if (!success) {
+      setState(() => _error = 'Invalid credentials');
+      return;
+    }
+
+    final user = Provider.of<AppDataProvider>(
+      context,
+      listen: false,
+    ).loggedInUser;
+    final role = user?['role'];
+    final assignedShops = (user?['assignedShops'] ?? []).cast<String>();
+
+    if (role == 'employee') {
+      if (assignedShops.length == 1) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => AddSaleScreen(selectedShopId: assignedShops.first),
+          ),
+        );
+      } else {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const ShopSelectionScreen()),
+        );
+      }
+    } else {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const HomeScreen()),
       );
-    } else {
-      setState(() {
-        _error = 'Invalid email, password, or user not found in Firestore.';
-      });
     }
   }
 
