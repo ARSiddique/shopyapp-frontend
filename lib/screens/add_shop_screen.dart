@@ -31,45 +31,54 @@ class _AddShopScreenState extends State<AddShopScreen> {
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);
-    final appData = Provider.of<AppDataProvider>(context, listen: false);
+
+    final contextOwner = context; // ✅ capture context early
+    final appData = Provider.of<AppDataProvider>(contextOwner, listen: false);
 
     final shopData = {
       'name': _nameController.text.trim(),
       'isOpen': _isOpen,
       'isDeleted': false,
       'updatedAt': DateTime.now(),
-      'employees': [], // ✅ Prevents crash in ShopCard etc.
+      'employees': [],
     };
 
     try {
       if (widget.existingShop != null) {
-        // Update existing shop
         final docId = widget.existingShop!['id'];
         await FirebaseFirestore.instance
             .collection('shops')
             .doc(docId)
             .update(shopData);
-        ScaffoldMessenger.of(context).showSnackBar(
+
+        if (!contextOwner.mounted) return;
+        ScaffoldMessenger.of(contextOwner).showSnackBar(
           const SnackBar(content: Text('Shop updated successfully')),
         );
       } else {
-        // Add new shop
         shopData['createdAt'] = DateTime.now();
         await FirebaseFirestore.instance.collection('shops').add(shopData);
-        ScaffoldMessenger.of(context).showSnackBar(
+
+        if (!contextOwner.mounted) return;
+        ScaffoldMessenger.of(contextOwner).showSnackBar(
           const SnackBar(content: Text('Shop added successfully')),
         );
       }
 
       await appData.fetchShops();
-      Navigator.pop(context);
+
+      if (!contextOwner.mounted) return;
+      Navigator.pop(contextOwner);
     } catch (e) {
+      if (!contextOwner.mounted) return;
       ScaffoldMessenger.of(
-        context,
+        contextOwner,
       ).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
     }
 
-    setState(() => _isLoading = false);
+    if (mounted) {
+      setState(() => _isLoading = false);
+    }
   }
 
   @override
