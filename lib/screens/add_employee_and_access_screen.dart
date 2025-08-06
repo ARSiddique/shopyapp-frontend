@@ -36,12 +36,13 @@ class _AddEmployeeAndAccessScreenState
     super.initState();
 
     Future.delayed(Duration.zero, () {
+      if (!mounted) return;
       final user = Provider.of<AppDataProvider>(
         context,
         listen: false,
       ).loggedInUser;
       _loggedInUser = user;
-
+      if (!mounted) return;
       final routeArgs = ModalRoute.of(context)?.settings.arguments;
       _isAssigningToSelf = routeArgs == 'assignMyself';
 
@@ -102,6 +103,7 @@ class _AddEmployeeAndAccessScreenState
 
       // 🔸 Validate shop assignment for employees
       if (_selectedRole == 'employee' && _selectedShops.isEmpty) {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Please assign at least one shop to this employee.'),
@@ -242,6 +244,7 @@ class _AddEmployeeAndAccessScreenState
         Navigator.pop(context);
       }
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Error: $e')));
@@ -338,8 +341,9 @@ class _AddEmployeeAndAccessScreenState
                     .where('isDeleted', isEqualTo: false)
                     .snapshots(),
                 builder: (context, snapshot) {
-                  if (!snapshot.hasData)
+                  if (!snapshot.hasData) {
                     return const Center(child: CircularProgressIndicator());
+                  }
                   final shopDocs = snapshot.data!.docs;
                   if (shopDocs.isEmpty) return const Text("No shops found.");
 
