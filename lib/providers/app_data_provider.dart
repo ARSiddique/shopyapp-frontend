@@ -33,11 +33,16 @@ class AppDataProvider extends ChangeNotifier {
           .limit(1)
           .get();
 
-      print("Trying login with name: $trimmedName and code: $trimmedCode");
-      print("Found users: ${snapshot.docs.length}");
+      log(
+        "Trying login with name: $trimmedName and code: $trimmedCode",
+        name: 'Auth',
+      );
+
+      log("Found users: ${snapshot.docs.length}", name: 'Auth');
 
       if (snapshot.docs.isEmpty) {
-        print("❌ No matching user found");
+        log("❌ No matching user found", name: 'Auth');
+
         return false;
       }
 
@@ -46,10 +51,10 @@ class AppDataProvider extends ChangeNotifier {
 
       loginUser(userData); // sets _loggedInUser and notifies listeners
 
-      print("✅ Login success: ${userData['name']}");
+      log("✅ Login success: ${userData['name']}", name: 'Auth');
       return true;
     } catch (e) {
-      print("🔥 Login error: $e");
+      log("🔥 Login error: $e", name: 'Auth');
       return false;
     }
   }
@@ -63,7 +68,7 @@ class AppDataProvider extends ChangeNotifier {
       final user = credential.user;
       if (user == null) return false;
 
-      print('Logged in UID: ${user.uid}');
+      log('Logged in UID: ${user.uid}', name: 'Auth');
 
       final snapshot = await FirebaseFirestore.instance
           .collection('users')
@@ -71,17 +76,17 @@ class AppDataProvider extends ChangeNotifier {
           .get();
 
       if (!snapshot.exists) {
-        print('User document not found in Firestore');
+        log('User document not found in Firestore', name: 'Auth');
         return false;
       }
 
-      print('Fetched user data: ${snapshot.data()}');
+      log('Fetched user data: ${snapshot.data()}', name: 'Auth');
 
       _loggedInUser = snapshot.data()!..['uid'] = user.uid;
       notifyListeners();
       return true;
     } catch (e) {
-      print('Login failed: $e');
+      log('Login failed: $e', name: 'Auth');
       return false;
     }
   }
@@ -169,7 +174,7 @@ class AppDataProvider extends ChangeNotifier {
         }
       }
     } catch (e) {
-      debugPrint('❌ Error cleaning shop from employees/users: $e');
+      log('❌ Error cleaning shop from employees/users: $e', name: 'Shop');
     }
   }
 
@@ -186,7 +191,7 @@ class AppDataProvider extends ChangeNotifier {
         }
       }
     } catch (e) {
-      debugPrint('❌ Error cleaning employee from shops: $e');
+      log('❌ Error cleaning employee from shops: $e', name: 'Employee');
     }
   }
 
@@ -215,7 +220,7 @@ class AppDataProvider extends ChangeNotifier {
 
       notifyListeners();
     } catch (e) {
-      debugPrint('Error submitting sale edit request: $e');
+      log('Error submitting sale edit request: $e', name: 'Sales');
     }
   }
 
@@ -232,7 +237,7 @@ class AppDataProvider extends ChangeNotifier {
       });
       await fetchSales(); // to refresh the local _sales list
     } catch (e) {
-      debugPrint('Error updating sale: $e');
+      log('Error updating sale: $e', name: 'Sales');
     }
   }
 
@@ -245,7 +250,7 @@ class AppDataProvider extends ChangeNotifier {
       await fetchSales(); // refresh local list
       notifyListeners();
     } catch (e) {
-      debugPrint('Error updating sale: $e');
+      log('Error updating sale: $e', name: 'Sales');
     }
   }
 
@@ -297,7 +302,7 @@ class AppDataProvider extends ChangeNotifier {
         .collection('employees')
         .get();
     employees = snapshot.docs
-        .map((doc) => {'uid': doc.id, ...doc.data() as Map<String, dynamic>})
+        .map((doc) => {'uid': doc.id, ...doc.data()})
         .toList();
     notifyListeners();
   }
@@ -340,7 +345,7 @@ class AppDataProvider extends ChangeNotifier {
 
       notifyListeners();
     } catch (e) {
-      print("Error deleting shop: $e");
+      log("Error deleting shop: $e", name: 'Shop');
     }
   }
 
@@ -370,7 +375,7 @@ class AppDataProvider extends ChangeNotifier {
       await fetchEmployees();
       notifyListeners();
     } catch (e) {
-      print("Error deleting employee: $e");
+      log("Error deleting employee: $e", name: 'Employee');
     }
   }
 
@@ -405,7 +410,7 @@ class AppDataProvider extends ChangeNotifier {
       _orders.add(order);
       notifyListeners();
     } catch (e) {
-      debugPrint('Error adding order: $e');
+      log('Error adding order: $e', name: 'Orders');
     }
   }
 
@@ -431,7 +436,7 @@ class AppDataProvider extends ChangeNotifier {
       _orders.removeWhere((o) => o['id'] == id);
       notifyListeners();
     } catch (e) {
-      debugPrint('Error deleting order: $e');
+      log('Error deleting order: $e', name: 'Orders');
     }
   }
 
@@ -449,7 +454,7 @@ class AppDataProvider extends ChangeNotifier {
         notifyListeners();
       }
     } catch (e) {
-      debugPrint('Error updating order: $e');
+      log('Error updating order: $e', name: 'Orders');
     }
   }
 
@@ -496,7 +501,7 @@ class AppDataProvider extends ChangeNotifier {
         _sales.add(saleData);
         notifyListeners();
       } catch (e) {
-        debugPrint('Error adding sale: $e');
+        log('Error adding sale: $e');
       }
     }
   }
@@ -531,7 +536,7 @@ class AppDataProvider extends ChangeNotifier {
       await fetchSales();
       notifyListeners();
     } catch (e) {
-      debugPrint('Error approving sale edit: $e');
+      log('Error approving sale edit: $e', name: 'Sales');
     }
   }
 
@@ -546,7 +551,7 @@ class AppDataProvider extends ChangeNotifier {
       await fetchEditRequests();
       notifyListeners();
     } catch (e) {
-      debugPrint('Error rejecting sale edit: $e');
+      log('Error rejecting sale edit: $e', name: 'Sales');
     }
   }
 
@@ -558,6 +563,9 @@ class AppDataProvider extends ChangeNotifier {
     if (_loggedInUser == null) return;
 
     final updates = <String, dynamic>{};
+    final userDocId = _loggedInUser!['id'];
+
+    // 🔹 Update email and phone in Firestore
     if (email != null) {
       _loggedInUser!['email'] = email;
       updates['email'] = email;
@@ -566,20 +574,26 @@ class AppDataProvider extends ChangeNotifier {
       _loggedInUser!['phone'] = phone;
       updates['phone'] = phone;
     }
+
+    // 🔐 Directly update password in Firebase Auth
     if (password != null) {
-      _loggedInUser!['password'] = password;
-      updates['password'] = password;
+      try {
+        await FirebaseAuth.instance.currentUser!.updatePassword(password);
+        log("✅ Password updated successfully", name: 'Profile');
+      } catch (e) {
+        log("❌ Failed to update password: $e", name: 'Profile');
+      }
+    }
+
+    // 🔁 Update Firestore document (without password)
+    if (userDocId != null && updates.isNotEmpty) {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(userDocId)
+          .update(updates);
     }
 
     notifyListeners();
-
-    // ✅ Firestore Update
-    if (_loggedInUser!['id'] != null && updates.isNotEmpty) {
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(_loggedInUser!['id']) // this is the doc ID
-          .update(updates);
-    }
   }
 
   void editSale(Map<String, dynamic> updatedSale) {
@@ -595,7 +609,7 @@ class AppDataProvider extends ChangeNotifier {
       await FirebaseFirestore.instance.collection('sales').doc(saleId).delete();
       await fetchSales(); // to refresh list after delete
     } catch (e) {
-      debugPrint('Error deleting sale: $e');
+      log('Error deleting sale: $e', name: 'Sales');
     }
   }
 
@@ -683,7 +697,7 @@ class AppDataProvider extends ChangeNotifier {
       await fetchAllData();
       notifyListeners();
     } catch (e) {
-      debugPrint('Error approving edit request: $e');
+      log('Error approving edit request: $e', name: 'Requests');
     }
   }
 
@@ -698,7 +712,7 @@ class AppDataProvider extends ChangeNotifier {
       await fetchAllData();
       notifyListeners();
     } catch (e) {
-      debugPrint('Error rejecting edit request: $e');
+      log('Error rejecting edit request: $e', name: 'Requests');
     }
   }
 
@@ -710,7 +724,7 @@ class AppDataProvider extends ChangeNotifier {
       employees.clear();
       employees.addAll(snapshot.docs.map((doc) => doc.data()));
     } catch (e) {
-      debugPrint('Error fetching users: $e');
+      log('Error fetching users: $e', name: 'Users');
     }
   }
 
@@ -731,7 +745,7 @@ class AppDataProvider extends ChangeNotifier {
       _orders.clear();
       _orders.addAll(snapshot.docs.map((doc) => doc.data()));
     } catch (e) {
-      debugPrint('Error fetching orders: $e');
+      log('Error fetching orders: $e', name: 'Orders');
     }
   }
 
@@ -771,7 +785,7 @@ class AppDataProvider extends ChangeNotifier {
       );
       notifyListeners();
     } catch (e) {
-      debugPrint('Error fetching sales: $e');
+      log('Error fetching sales: $e', name: 'Sales');
     }
   }
 
@@ -785,7 +799,7 @@ class AppDataProvider extends ChangeNotifier {
         snapshot.docs.map((doc) => {'firebaseId': doc.id, ...doc.data()}),
       );
     } catch (e) {
-      debugPrint('Error fetching edit requests: $e');
+      log('Error fetching edit requests: $e', name: 'Requests');
     }
   }
 
@@ -883,7 +897,7 @@ class AppDataProvider extends ChangeNotifier {
 
       notifyListeners();
     } catch (e) {
-      debugPrint('❌ Error updating assignments: $e');
+      log('❌ Error updating assignments: $e');
     }
   }
 

@@ -101,6 +101,8 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
             .get();
 
         if (existingSaleQuery.docs.isNotEmpty) {
+          if (!mounted) return;
+
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text(
@@ -121,6 +123,8 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
 
       if (mounted) Navigator.pop(context);
     } catch (e) {
+      if (!mounted) return;
+
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Error: $e')));
@@ -133,7 +137,6 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
   Widget build(BuildContext context) {
     final appData = Provider.of<AppDataProvider>(context);
     final user = appData.loggedInUser ?? {};
-    final role = user['role'] ?? 'employee';
     final assignedShops = appData.getAssignedShopsForUser(user['uid'] ?? '');
     final isMultiShop = assignedShops.length > 1;
 
