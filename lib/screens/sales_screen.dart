@@ -1,3 +1,5 @@
+// ✅ FINAL POLISHED VERSION OF SalesScreen WITH EXPORT + EDIT + DELETE + ROLE SUPPORT
+
 import 'dart:io';
 import 'package:csv/csv.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -8,7 +10,7 @@ import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../providers/app_data_provider.dart';
 import 'add_sale_screen.dart';
-import '../widgets/edit_sale_modal.dart';
+// import '../widgets/edit_sale_modal.dart';
 
 class SalesScreen extends StatefulWidget {
   const SalesScreen({super.key});
@@ -76,20 +78,10 @@ class _SalesScreenState extends State<SalesScreen> {
     }
   }
 
-  Future<void> _editSale(Map<String, dynamic> sale) async {
-    await showDialog(
-      context: context,
-      builder: (_) => EditSaleModal(
-        initialAmount: sale['total'] ?? 0.0,
-        onSubmit: (updatedAmount, reason) async {
-          final appData = Provider.of<AppDataProvider>(context, listen: false);
-          await appData.updateSaleAmount(sale['id'], updatedAmount, reason);
-          if (_mounted && context.mounted) {
-            await appData.fetchSales();
-            setState(() {});
-          }
-        },
-      ),
+  void _openEditSale(Map<String, dynamic> sale) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => AddSaleScreen(existingSale: sale)),
     );
   }
 
@@ -199,7 +191,6 @@ class _SalesScreenState extends State<SalesScreen> {
     final sales = appData.sales;
     final dateFormat = DateFormat('yyyy-MM-dd');
     final timeFormat = DateFormat('hh:mm a');
-
     final cashTotal = sales.fold<double>(0, (sum, s) => sum + (s['cash'] ?? 0));
     final cardTotal = sales.fold<double>(0, (sum, s) => sum + (s['card'] ?? 0));
     final otherTotal = sales.fold<double>(
@@ -309,7 +300,7 @@ class _SalesScreenState extends State<SalesScreen> {
                                           size: 18,
                                           color: Colors.blue,
                                         ),
-                                        onPressed: () => _editSale(sale),
+                                        onPressed: () => _openEditSale(sale),
                                         tooltip: 'Edit Sale',
                                       ),
                                       IconButton(

@@ -7,8 +7,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../providers/app_data_provider.dart';
 import 'package:provider/provider.dart';
 
-
-
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
 
@@ -31,31 +29,40 @@ class _SplashScreenState extends State<SplashScreen> {
     _timer = Timer(const Duration(seconds: 2), _navigate);
   }
 
- void _navigate() async {
+  Future<void> _navigate() async {
     try {
       final user = FirebaseAuth.instance.currentUser;
 
       if (user != null) {
-        // Fetch role from Firestore
-        final doc = await FirebaseFirestore.instance
+        // 🔄 Get user by email (not UID as document ID)
+        final querySnapshot = await FirebaseFirestore.instance
             .collection('users')
-            .doc(user.uid)
+            .where('email', isEqualTo: user.email)
+            .limit(1)
             .get();
 
-        if (doc.exists) {
-          final userData = doc.data()!;
+        if (querySnapshot.docs.isNotEmpty) {
+          final userDoc = querySnapshot.docs.first;
+          final userData = userDoc.data();
+          userData['id'] = userDoc.id;
+
           if (!mounted) return;
-         final appData = Provider.of<AppDataProvider>(context, listen: false);
-          appData.loginUser({...userData, 'id': doc.id}); // Store ID as well
+          final appData = Provider.of<AppDataProvider>(context, listen: false);
+          appData.loginUser(userData);
           await appData.fetchAllData();
-          appData.startFirebaseListeners(); // Optional: preload data
+          appData.startFirebaseListeners();
+        } else {
+          // User authenticated but not found in Firestore
+          setState(() => _hasError = true);
+          return;
         }
       }
 
       final nextScreen = user != null
           ? const HomeScreen()
           : const LoginScreen();
-if (!mounted) return;
+
+      if (!mounted) return;
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => nextScreen),

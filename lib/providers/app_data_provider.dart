@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:developer';
 
 class AppDataProvider extends ChangeNotifier {
   Map<String, dynamic>? _loggedInUser;
@@ -20,30 +22,68 @@ class AppDataProvider extends ChangeNotifier {
   }
 
   Future<bool> loginWithNameAndCode(String name, String code) async {
-    if (name.isEmpty || code.isEmpty) return false;
+    final trimmedName = name.trim().toLowerCase(); // 🔹 safer comparison
+    final trimmedCode = code.trim();
 
     try {
       final snapshot = await FirebaseFirestore.instance
           .collection('users')
-          .where('name', isEqualTo: name)
-          .where('loginCode', isEqualTo: code)
+          .where('name', isEqualTo: trimmedName)
+          .where('loginCode', isEqualTo: trimmedCode)
           .limit(1)
           .get();
 
-      if (snapshot.docs.isNotEmpty) {
-        _loggedInUser = snapshot.docs.first.data();
-        notifyListeners();
+      print("Trying login with name: $trimmedName and code: $trimmedCode");
+      print("Found users: ${snapshot.docs.length}");
 
-        // Debug log
-        print("LOGIN ROLE: ${_loggedInUser?['role']}");
-        print("LOGIN Assigned Shops: ${_loggedInUser?['assignedShops']}");
-        return true;
+      if (snapshot.docs.isEmpty) {
+        print("❌ No matching user found");
+        return false;
       }
-    } catch (e) {
-      print('Login error: $e');
-    }
 
-    return false;
+      final userData = snapshot.docs.first.data();
+      userData['id'] = snapshot.docs.first.id;
+
+      loginUser(userData); // sets _loggedInUser and notifies listeners
+
+      print("✅ Login success: ${userData['name']}");
+      return true;
+    } catch (e) {
+      print("🔥 Login error: $e");
+      return false;
+    }
+  }
+
+  Future<bool> loginWithEmailAndPassword(String email, String password) async {
+    try {
+      final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+      final user = credential.user;
+      if (user == null) return false;
+
+      print('Logged in UID: ${user.uid}');
+
+      final snapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+
+      if (!snapshot.exists) {
+        print('User document not found in Firestore');
+        return false;
+      }
+
+      print('Fetched user data: ${snapshot.data()}');
+
+      _loggedInUser = snapshot.data()!..['uid'] = user.uid;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      print('Login failed: $e');
+      return false;
+    }
   }
 
   List<Map<String, dynamic>> get editRequests => _editRequests;
@@ -194,6 +234,32 @@ class AppDataProvider extends ChangeNotifier {
     } catch (e) {
       debugPrint('Error updating sale: $e');
     }
+  }
+
+  Future<void> updateSale(String saleId, Map<String, dynamic> saleData) async {
+    try {
+      await FirebaseFirestore.instance
+          .collection('sales')
+          .doc(saleId)
+          .update(saleData);
+      await fetchSales(); // refresh local list
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error updating sale: $e');
+    }
+  }
+
+  List<String> getAssignedShopsForUser(String userId) {
+    final user = employees.firstWhere(
+      (emp) => emp['uid'] == userId,
+      orElse: () => {},
+    );
+
+    final assigned = user['assignedShops'] ?? [];
+    if (assigned is List) {
+      return List<String>.from(assigned.map((s) => s.toString()));
+    }
+    return [];
   }
 
   void assignAccess(String shopName, String employeeName) {

@@ -3,8 +3,8 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+// import 'package:firebase_auth/firebase_auth.dart';
+// import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../providers/app_data_provider.dart';
 import 'home_screen.dart';
@@ -32,63 +32,39 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _handleLogin() async {
     FocusScope.of(context).unfocus();
-    final email = _emailController.text.trim();
+    final email = _emailController.text.trim().toLowerCase();
     final password = _passwordController.text.trim();
 
     if (email.isEmpty || password.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Please enter both email and password'),
-          backgroundColor: Theme.of(context).colorScheme.error,
-        ),
-      );
+      setState(() {
+        _error = 'Please enter both email and password.';
+      });
       return;
     }
 
-    setState(() => _isLoading = true);
-    try {
-      // ✅ Sign in with Firebase Auth
-      final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: email,
-        password: password,
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+
+    final success = await Provider.of<AppDataProvider>(
+      context,
+      listen: false,
+    ).loginWithEmailAndPassword(email, password);
+
+    if (!mounted) return;
+
+    setState(() => _isLoading = false);
+
+    if (success) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const HomeScreen()),
       );
-
-      final user = credential.user;
-      if (user != null && mounted) {
-        // ✅ Fetch role from Firestore `users` collection
-        final querySnapshot = await FirebaseFirestore.instance
-            .collection('users')
-            .where('email', isEqualTo: user.email)
-            .limit(1)
-            .get();
-
-        if (querySnapshot.docs.isNotEmpty) {
-          final userData = querySnapshot.docs.first.data();
-          final role = userData['role'] ?? 'employee';
-
-          // Provider.of<AppDataProvider>(
-          //   context,
-          //   listen: false,
-          // ).loginUser({'email': user.email, 'uid': user.uid, 'role': role});
-          Provider.of<AppDataProvider>(
-            context,
-            listen: false,
-          ).loginUser(userData);
-
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => const HomeScreen()),
-          );
-        } else {
-          setState(() => _error = 'User not found in Firestore.');
-        }
-      }
-    } on FirebaseAuthException catch (e) {
-      setState(() => _error = e.message);
-    } catch (e) {
-      setState(() => _error = 'Something went wrong.');
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
+    } else {
+      setState(() {
+        _error = 'Invalid email, password, or user not found in Firestore.';
+      });
     }
   }
 
@@ -132,6 +108,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
@@ -180,7 +157,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     decoration: InputDecoration(
                       labelText: 'Email',
                       border: const OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.person),
+                      prefixIcon: const Icon(Icons.email),
                     ),
                   ),
                   const SizedBox(height: 20),
@@ -208,15 +185,10 @@ class _LoginScreenState extends State<LoginScreen> {
                     width: double.infinity,
                     child: ElevatedButton.icon(
                       icon: _isLoading
-                          ? SizedBox(
+                          ? const SizedBox(
                               height: 16,
                               width: 16,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation(
-                                  theme.colorScheme.onPrimary,
-                                ),
-                              ),
+                              child: CircularProgressIndicator(strokeWidth: 2),
                             )
                           : const Icon(Icons.login),
                       label: _isLoading
@@ -224,8 +196,6 @@ class _LoginScreenState extends State<LoginScreen> {
                           : const Text('Login'),
                       onPressed: _isLoading ? null : _handleLogin,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: theme.colorScheme.primary,
-                        foregroundColor: theme.colorScheme.onPrimary,
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),

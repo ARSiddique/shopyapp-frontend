@@ -19,6 +19,7 @@ import '../screens/login_screen.dart';
 import '../screens/all_shops_screen.dart';
 import '../screens/shop_detail_screen.dart';
 import '../screens/employees_overview_screen.dart';
+import 'package:intl/intl.dart';
 
 /// Shows a confirmation dialog before logging out.
 void showPlatformLogoutDialog(BuildContext context) {
@@ -158,21 +159,26 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final appData = Provider.of<AppDataProvider>(context);
-    final user = appData.loggedInUser;
-    final name = user?['name'] ?? 'User';
-    final role = user?['role'];
-    // final isEmployee = role == 'employee';
-    // final employeeName = user?['name'];
-    // final assignedShops = appData.shops.where((s) {
-    //   final assignedList = s['assignedEmployees'] ?? [];
-    //   return assignedList.any((e) => e['name'] == name);
-    // }).toList();
-    // final employeeOrders = appData.orders
-    //     .where((o) => o['employee'] == name)
-    //     .toList();
-    // final employeeSales = appData.sales
-    //     .where((s) => s['submittedBy'] == name)
-    //     .toList();
+    final user = appData.loggedInUser ?? {};
+    final role = user['role'] ?? 'employee';
+    final isAdmin = role == 'admin';
+    final isManager = role == 'manager';
+    final isEmployee = role == 'employee';
+    final userId = user['uid'] ?? '';
+
+    final todayDate = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    final assignedShops = appData.getAssignedShopsForUser(userId);
+
+    // Calculate today's sales count for employee's assigned shops
+    int todaySalesCount = 0;
+    if (isEmployee) {
+      todaySalesCount = appData.sales.where((sale) {
+        final saleDate = sale['saleDate'];
+        final shopName = sale['shop'];
+        return saleDate == todayDate && assignedShops.contains(shopName);
+      }).length;
+    }
+
     final pages = <Widget>[
       const HomeDashboard(),
       const ProfileScreen(),
@@ -209,7 +215,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ? AppBar(
                 backgroundColor: Colors.deepPurple,
                 title: Text(
-                  '$name (${role[0].toUpperCase()}${role.substring(1)})',
+                  '${user['name']} (${role[0].toUpperCase()}${role.substring(1)})',
                   style: const TextStyle(color: Colors.white),
                 ),
                 actions: [
@@ -248,14 +254,27 @@ class HomeDashboard extends StatelessWidget {
     final appData = Provider.of<AppDataProvider>(context);
     final user = appData.loggedInUser ?? {};
     final role = user['role']?.toLowerCase() ?? 'employee';
-    final isEmployee = role == 'employee'; // ✅ ADD THIS
+    final isEmployee = role == 'employee';
     final employeeName = user['name'] ?? '';
+
+    // For Orders & Sales by employee
     final employeeOrders = appData.orders
         .where((order) => order['employee'] == employeeName)
-        .toList(); // ✅ ADD THIS
+        .toList();
     final employeeSales = appData.sales
         .where((sale) => sale['employee'] == employeeName)
-        .toList(); // ✅ ADD TH
+        .toList();
+
+    // ✅ Add this block here:
+    final todayDate = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    final assignedShops = (user['assignedShops'] ?? [])
+        .map<String>((s) => s.toString())
+        .toList();
+    final todayShopSales = appData.sales.where((sale) {
+      final saleDate = sale['saleDate'];
+      final shopName = sale['shop'];
+      return saleDate == todayDate && assignedShops.contains(shopName);
+    }).toList();
 
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance.collection('shops').snapshots(),
@@ -331,7 +350,7 @@ class HomeDashboard extends StatelessWidget {
                       icon: Icons.trending_up,
                       title: 'Sales',
                       value: isEmployee
-                          ? employeeSales.length.toString()
+                          ? todayShopSales.length.toString()
                           : appData.sales.length.toString(),
                       color: Colors.teal,
                       onTap: () {

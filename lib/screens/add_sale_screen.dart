@@ -1,3 +1,5 @@
+// ✅ FINAL POLISHED VERSION OF AddSaleScreen WITH ADD + EDIT SUPPORT
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
@@ -5,7 +7,8 @@ import '../providers/app_data_provider.dart';
 import 'package:intl/intl.dart';
 
 class AddSaleScreen extends StatefulWidget {
-  const AddSaleScreen({super.key});
+  final Map<String, dynamic>? existingSale;
+  const AddSaleScreen({super.key, this.existingSale});
 
   @override
   State<AddSaleScreen> createState() => _AddSaleScreenState();
@@ -19,6 +22,25 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
   final _cardController = TextEditingController();
   final _otherController = TextEditingController();
   bool _isLoading = false;
+  bool _isEditMode = false;
+  String? _docId;
+
+  @override
+  void initState() {
+    super.initState();
+    final sale = widget.existingSale;
+    if (sale != null) {
+      _isEditMode = true;
+      _docId = sale['id'];
+      _selectedShop = sale['shop'];
+      _cashController.text = (sale['cash'] ?? '').toString();
+      _cardController.text = (sale['card'] ?? '').toString();
+      _otherController.text = (sale['other'] ?? '').toString();
+      if (sale['saleDate'] != null) {
+        _selectedDate = DateFormat('yyyy-MM-dd').parse(sale['saleDate']);
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -42,26 +64,6 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     try {
       final shopName = _selectedShop!;
       final formattedDate = DateFormat('yyyy-MM-dd').format(_selectedDate);
-
-      final existingSaleQuery = await FirebaseFirestore.instance
-          .collection('sales')
-          .where('shop', isEqualTo: shopName)
-          .where('saleDate', isEqualTo: formattedDate)
-          .limit(1)
-          .get();
-
-      if (existingSaleQuery.docs.isNotEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Sale already exists for this shop on the selected date.',
-            ),
-          ),
-        );
-        setState(() => _isLoading = false);
-        return;
-      }
-
       final appData = Provider.of<AppDataProvider>(context, listen: false);
       final user = appData.loggedInUser;
 
@@ -80,14 +82,44 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
         'createdAt': Timestamp.now(),
       };
 
-      await FirebaseFirestore.instance.collection('sales').add(saleData);
+      if (_isEditMode && _docId != null) {
+        await FirebaseFirestore.instance
+            .collection('sales')
+            .doc(_docId)
+            .update(saleData);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Sale updated successfully')),
+          );
+        }
+      } else {
+        final existingSaleQuery = await FirebaseFirestore.instance
+            .collection('sales')
+            .where('shop', isEqualTo: shopName)
+            .where('saleDate', isEqualTo: formattedDate)
+            .limit(1)
+            .get();
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Sale added successfully')),
-        );
-        Navigator.pop(context);
+        if (existingSaleQuery.docs.isNotEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Sale already exists for this shop on the selected date.',
+              ),
+            ),
+          );
+          setState(() => _isLoading = false);
+          return;
+        }
+        await FirebaseFirestore.instance.collection('sales').add(saleData);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Sale added successfully')),
+          );
+        }
       }
+
+      if (mounted) Navigator.pop(context);
     } catch (e) {
       ScaffoldMessenger.of(
         context,
@@ -100,11 +132,19 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
   @override
   Widget build(BuildContext context) {
     final appData = Provider.of<AppDataProvider>(context);
-    final userRole = appData.loggedInUser?['role'] ?? 'employee';
+    final user = appData.loggedInUser ?? {};
+    final role = user['role'] ?? 'employee';
+    final assignedShops = appData.getAssignedShopsForUser(user['uid'] ?? '');
+    final isMultiShop = assignedShops.length > 1;
+
+    // ✅ Prevent crash: only assign if not empty
+    if (_selectedShop == null && assignedShops.isNotEmpty) {
+      _selectedShop = assignedShops.first;
+    }
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Add Sale'),
+        title: Text(_isEditMode ? 'Edit Sale' : 'Add Sale'),
         backgroundColor: Colors.deepPurple,
       ),
       body: Padding(
@@ -114,33 +154,35 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
           child: ListView(
             children: [
               const Text('Select Shop'),
-              StreamBuilder<QuerySnapshot>(
-                stream: FirebaseFirestore.instance
-                    .collection('shops')
-                    .where('isDeleted', isEqualTo: false)
-                    .snapshots(),
-                builder: (context, snapshot) {
-                  if (!snapshot.hasData)
-                    return const CircularProgressIndicator();
-                  final shops = snapshot.data!.docs;
-                  return DropdownButtonFormField<String>(
-                    value: _selectedShop,
-                    items: shops
-                        .map(
-                          (doc) => DropdownMenuItem<String>(
-                            value: doc['name'] as String,
-                            child: Text(doc['name']),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (val) => setState(() => _selectedShop = val),
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (val) => val == null ? 'Select a shop' : null,
-                  );
-                },
-              ),
+              if (isMultiShop)
+                DropdownButtonFormField<String>(
+                  value: _selectedShop,
+                  items: assignedShops
+                      .map(
+                        (shopName) => DropdownMenuItem<String>(
+                          value: shopName,
+                          child: Text(shopName),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (val) => setState(() => _selectedShop = val),
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (val) => val == null ? 'Select a shop' : null,
+                )
+              else
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 12,
+                    horizontal: 16,
+                  ),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.grey),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(_selectedShop ?? 'No Shop Assigned'),
+                ),
               const SizedBox(height: 16),
               const Text('Select Date (Today or Yesterday)'),
               Row(
@@ -187,7 +229,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
                   ? const Center(child: CircularProgressIndicator())
                   : ElevatedButton(
                       onPressed: _submitSale,
-                      child: const Text('Submit Sale'),
+                      child: Text(_isEditMode ? 'Update Sale' : 'Submit Sale'),
                     ),
             ],
           ),
@@ -196,9 +238,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     );
   }
 
-  bool isSameDay(DateTime date1, DateTime date2) {
-    return date1.year == date2.year &&
-        date1.month == date2.month &&
-        date1.day == date2.day;
+  bool isSameDay(DateTime d1, DateTime d2) {
+    return d1.year == d2.year && d1.month == d2.month && d1.day == d2.day;
   }
 }
