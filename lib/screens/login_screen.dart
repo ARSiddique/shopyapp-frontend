@@ -1,10 +1,9 @@
 import 'dart:io' show Platform;
+import 'dart:developer';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-// import 'package:firebase_auth/firebase_auth.dart';
-// import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../providers/app_data_provider.dart';
 import 'home_screen.dart';
@@ -34,45 +33,63 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _handleLogin() async {
     FocusScope.of(context).unfocus();
-    setState(() => _isLoading = true);
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
 
-    final success = await Provider.of<AppDataProvider>(context, listen: false)
-        .loginWithNameAndCode(
-          _emailController.text.trim(),
-          _passwordController.text.trim(),
-        );
+    final appData = context.read<AppDataProvider>();
 
-    setState(() => _isLoading = false);
+    final success = await appData.loginWithEmailAndPassword(
+      _emailController.text.trim(),
+      _passwordController.text.trim(),
+    );
 
     if (!mounted) return;
 
     if (!success) {
-      setState(() => _error = 'Invalid credentials');
+      setState(() {
+        _isLoading = false;
+        _error = 'Login failed. Please check your credentials.';
+      });
       return;
     }
 
-    final user = Provider.of<AppDataProvider>(
-      context,
-      listen: false,
-    ).loggedInUser;
-    final role = user?['role'];
-    final assignedShops = (user?['assignedShops'] ?? []).cast<String>();
+    // 🔄 Ensure fresh data + listeners
+    await appData.fetchAllData();
+    appData.startFirebaseListeners();
+
+    // thora sa wait taa-ke listeners apply ho jayen
+    await Future.delayed(const Duration(milliseconds: 200));
+
+    final user = appData.loggedInUser;
+    final role = (user?['role'] ?? '').toString().toLowerCase();
+    final assignedShops =
+        (user?['assignedShops'] as List? ?? []).map((e) => e.toString()).toList();
+
+    log('ROLE: $role');
+    log('Assigned Shops: $assignedShops');
+
+    setState(() => _isLoading = false);
 
     if (role == 'employee') {
       if (assignedShops.length == 1) {
+        // 1 shop → directly Add Sale
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
-            builder: (_) => AddSaleScreen(selectedShopId: assignedShops.first),
+            builder: (_) => AddSaleScreen(shopName: assignedShops.first),
           ),
         );
       } else {
+        // 0 ya >1 → Shop Selection (0 ho to wahan "Shop Not Assigned" dikhega)
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (_) => const ShopSelectionScreen()),
         );
       }
     } else {
+      // admin / manager
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const HomeScreen()),
@@ -80,7 +97,7 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  Future<bool> _onWillPop() async {
+  Future<bool> _confirmExit() async {
     return await showDialog<bool>(
           context: context,
           builder: (ctx) => Platform.isIOS
@@ -124,7 +141,7 @@ class _LoginScreenState extends State<LoginScreen> {
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
-        final shouldExit = await _onWillPop();
+        final shouldExit = await _confirmExit();
         if (shouldExit) SystemNavigator.pop();
       },
       child: Scaffold(
@@ -166,10 +183,10 @@ class _LoginScreenState extends State<LoginScreen> {
                   TextField(
                     controller: _emailController,
                     keyboardType: TextInputType.emailAddress,
-                    decoration: InputDecoration(
+                    decoration: const InputDecoration(
                       labelText: 'Email',
-                      border: const OutlineInputBorder(),
-                      prefixIcon: const Icon(Icons.email),
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.email),
                     ),
                   ),
                   const SizedBox(height: 20),
@@ -186,9 +203,8 @@ class _LoginScreenState extends State<LoginScreen> {
                               ? Icons.visibility_off
                               : Icons.visibility,
                         ),
-                        onPressed: () => setState(
-                          () => _obscurePassword = !_obscurePassword,
-                        ),
+                        onPressed: () =>
+                            setState(() => _obscurePassword = !_obscurePassword),
                       ),
                     ),
                   ),

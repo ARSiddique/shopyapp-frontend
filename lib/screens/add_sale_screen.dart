@@ -1,280 +1,478 @@
-import 'package:flutter/material.dart';
+import 'dart:io' show Platform;
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:provider/provider.dart';
-import '../providers/app_data_provider.dart';
+import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
+
+import '../providers/app_data_provider.dart';
 import 'shop_selection_screen.dart';
-import 'login_screen.dart';
 
 class AddSaleScreen extends StatefulWidget {
-  final Map<String, dynamic>? existingSale;
-  final String? selectedShopId;
+  final String? shopName; // prefill for new entry or when coming from Sales screen
+  final Map<String, dynamic>? existingSale; // edit mode
 
-  const AddSaleScreen({super.key, this.existingSale, this.selectedShopId});
+  const AddSaleScreen({super.key, this.shopName, this.existingSale});
 
   @override
   State<AddSaleScreen> createState() => _AddSaleScreenState();
 }
 
 class _AddSaleScreenState extends State<AddSaleScreen> {
-  bool _isShopPreselected = false;
   final _formKey = GlobalKey<FormState>();
+
+  // controllers
+  final _cashC = TextEditingController();
+  final _cardC = TextEditingController();
+  final _otherC = TextEditingController();
   String? _selectedShop;
-  DateTime _selectedDate = DateTime.now();
-  final _cashController = TextEditingController();
-  final _cardController = TextEditingController();
-  final _otherController = TextEditingController();
-  bool _isLoading = false;
-  bool _isEditMode = false;
-  String? _docId;
+
+  bool _isSaving = false;
+  bool get isEdit => widget.existingSale != null;
 
   @override
   void initState() {
     super.initState();
-    final sale = widget.existingSale;
-    if (sale != null) {
-      _isEditMode = true;
-      _docId = sale['id'];
-      _selectedShop = sale['shop'];
-      _cashController.text = (sale['cash'] ?? '').toString();
-      _cardController.text = (sale['card'] ?? '').toString();
-      _otherController.text = (sale['other'] ?? '').toString();
-      if (sale['saleDate'] != null) {
-        _selectedDate = DateFormat('yyyy-MM-dd').parse(sale['saleDate']);
-      }
-    } else if (widget.selectedShopId != null) {
-      _selectedShop = widget.selectedShopId;
-      _isShopPreselected = true;
+
+    // Prefill edit
+    if (isEdit) {
+      final s = widget.existingSale!;
+      _selectedShop = s['shop']?.toString();
+      _cashC.text = (s['cash'] ?? 0).toString();
+      _cardC.text = (s['card'] ?? 0).toString();
+      _otherC.text = (s['other'] ?? 0).toString();
+    } else {
+      // Prefill new
+      _selectedShop = widget.shopName;
     }
   }
 
   @override
   void dispose() {
-    _cashController.dispose();
-    _cardController.dispose();
-    _otherController.dispose();
+    _cashC.dispose();
+    _cardC.dispose();
+    _otherC.dispose();
     super.dispose();
   }
 
-  Future<void> _submitSale() async {
+  double _toD(String s) => double.tryParse(s.trim().isEmpty ? '0' : s.trim()) ?? 0.0;
+
+  Future<bool> _confirmExit() async {
+    if (Platform.isIOS) {
+      final res = await showCupertinoDialog<bool>(
+        context: context,
+        builder: (_) => CupertinoAlertDialog(
+          title: const Text('Exit'),
+          content: const Text('Do you want to leave this screen?'),
+          actions: [
+            CupertinoDialogAction(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            CupertinoDialogAction(
+              isDestructiveAction: true,
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Leave'),
+            ),
+          ],
+        ),
+      );
+      return res ?? false;
+    } else {
+      final res = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Exit'),
+          content: const Text('Do you want to leave this screen?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+            TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Leave')),
+          ],
+        ),
+      );
+      return res ?? false;
+    }
+  }
+
+  Future<bool> _confirmSubmit(double total) async {
+    final msg = 'Submit sale of Rs. ${total.toStringAsFixed(0)} for "${_selectedShop ?? ''}"?';
+    if (Platform.isIOS) {
+      final res = await showCupertinoDialog<bool>(
+        context: context,
+        builder: (_) => CupertinoAlertDialog(
+          title: const Text('Confirm'),
+          content: Text(msg),
+          actions: [
+            CupertinoDialogAction(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('No'),
+            ),
+            CupertinoDialogAction(
+              isDefaultAction: true,
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Yes'),
+            ),
+          ],
+        ),
+      );
+      return res ?? false;
+    } else {
+      final res = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Confirm'),
+          content: Text(msg),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('No')),
+            TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Yes')),
+          ],
+        ),
+      );
+      return res ?? false;
+    }
+  }
+
+  Future<bool> _alreadyHasSaleToday({
+    required String shop,
+    String? ignoreSaleId, // in edit mode ignore itself
+  }) async {
+    final now = DateTime.now();
+    final start = DateTime(now.year, now.month, now.day);
+    final end = start.add(const Duration(days: 1));
+    final snap = await FirebaseFirestore.instance
+        .collection('sales')
+        .where('shop', isEqualTo: shop)
+        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
+        .where('createdAt', isLessThan: Timestamp.fromDate(end))
+        .get();
+
+    if (snap.docs.isEmpty) return false;
+    if (ignoreSaleId == null) return true;
+
+    // editing: allow if only this record exists for today
+    final others = snap.docs.where((d) => d.id != ignoreSaleId).toList();
+    return others.isNotEmpty;
+  }
+
+  Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
-    if (_selectedShop == null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Please select a shop')));
+    final app = context.read<AppDataProvider>();
+    final user = app.loggedInUser ?? {};
+    final role = (user['role'] ?? 'employee').toString().toLowerCase();
+
+    final shop = _selectedShop?.trim();
+    if (shop == null || shop.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select a shop')),
+      );
       return;
     }
 
-    setState(() => _isLoading = true);
+    final cash = _toD(_cashC.text);
+    final card = _toD(_cardC.text);
+    final other = _toD(_otherC.text);
+    final total = cash + card + other;
+
+    final ok = await _confirmSubmit(total);
+    if (!ok) return;
+
+    setState(() => _isSaving = true);
 
     try {
-      final shopName = _selectedShop!;
-      final formattedDate = DateFormat('yyyy-MM-dd').format(_selectedDate);
-      final appData = Provider.of<AppDataProvider>(context, listen: false);
-      final user = appData.loggedInUser;
-
-      final saleData = {
-        'shop': shopName,
-        'employee': user?['name'] ?? '',
-        'employeeId': user?['uid'],
-        'cash': double.tryParse(_cashController.text.trim()) ?? 0,
-        'card': double.tryParse(_cardController.text.trim()) ?? 0,
-        'other': double.tryParse(_otherController.text.trim()) ?? 0,
-        'total':
-            (double.tryParse(_cashController.text.trim()) ?? 0) +
-            (double.tryParse(_cardController.text.trim()) ?? 0) +
-            (double.tryParse(_otherController.text.trim()) ?? 0),
-        'saleDate': formattedDate,
-        'createdAt': Timestamp.now(),
-      };
-
-      if (_isEditMode && _docId != null) {
-        await FirebaseFirestore.instance
-            .collection('sales')
-            .doc(_docId)
-            .update(saleData);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Sale updated successfully')),
-          );
-        }
-      } else {
-        final existingSaleQuery = await FirebaseFirestore.instance
-            .collection('sales')
-            .where('shop', isEqualTo: shopName)
-            .where('saleDate', isEqualTo: formattedDate)
-            .limit(1)
-            .get();
-
-        if (existingSaleQuery.docs.isNotEmpty) {
-          if (!mounted) return;
-
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'Sale already exists for this shop on the selected date.',
-              ),
-            ),
-          );
-          setState(() => _isLoading = false);
-          return;
-        }
-        await FirebaseFirestore.instance.collection('sales').add(saleData);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Sale added successfully')),
-          );
-        }
+      // One sale per shop per day (NEW) — in edit, ignore own id
+      final ignoreId = isEdit ? widget.existingSale!['id']?.toString() : null;
+      final exists = await _alreadyHasSaleToday(shop: shop, ignoreSaleId: ignoreId);
+      if (!isEdit && exists) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Sale already exists for this shop today'),
+            backgroundColor: Colors.red, // 🔴 as requested
+          ),
+        );
+        setState(() => _isSaving = false);
+        return;
       }
 
-      if (mounted) Navigator.pop(context);
-    } catch (e) {
+      if (isEdit) {
+        // UPDATE
+        final id = widget.existingSale!['id'].toString();
+        await app.updateSale(id, {
+          'shop': shop,
+          'cash': cash,
+          'card': card,
+          'other': other,
+          'total': total,
+          'editedAt': Timestamp.now(),
+        });
+      } else {
+        // ADD
+        await app.addSale({
+          'shop': shop,
+          'cash': cash,
+          'card': card,
+          'other': other,
+          'total': total,
+          'employee': (user['name'] ?? '').toString(),
+          'addedBy': (user['name'] ?? '').toString(),
+          'creatorUid': (user['uid'] ?? '').toString(),
+          'createdAt': Timestamp.now(), // provider will normalize locally
+        });
+      }
+
       if (!mounted) return;
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      // Go back smartly:
+      // Employee: if multiple shops → go to ShopSelection; if one → confirm exit to close
+      // Admin/Manager: just pop
+      final assignedShops = (user['assignedShops'] ?? const <String>[]).cast<String>();
+      if (role == 'employee') {
+        if (assignedShops.length > 1) {
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const ShopSelectionScreen()),
+            (r) => r.isFirst,
+          );
+        } else {
+          Navigator.of(context).pop(); // go back to previous
+        }
+      } else {
+        Navigator.of(context).pop();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e')),
+      );
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) setState(() => _isSaving = false);
     }
+  }
+
+  Future<void> _switchShopIfAllowed() async {
+    final app = context.read<AppDataProvider>();
+    final user = app.loggedInUser ?? {};
+    final role = (user['role'] ?? 'employee').toString().toLowerCase();
+    final assignedShops = (user['assignedShops'] ?? const <String>[]).cast<String>();
+
+    if (role == 'employee' && assignedShops.length > 1) {
+      // Go to selection
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const ShopSelectionScreen()),
+      );
+    }
+  }
+
+  Future<bool> _handleBack() async {
+    final app = context.read<AppDataProvider>();
+    final user = app.loggedInUser ?? {};
+    final role = (user['role'] ?? 'employee').toString().toLowerCase();
+    final assigned = (user['assignedShops'] ?? const <String>[]).cast<String>();
+
+    if (role == 'employee') {
+      if (assigned.length > 1) {
+        // back => go to shop selection
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const ShopSelectionScreen()),
+        );
+        return false;
+      } else {
+        // back => ask exit
+        return await _confirmExit();
+      }
+    }
+    // admin/manager -> normal pop
+    return true;
   }
 
   @override
   Widget build(BuildContext context) {
-    final appData = Provider.of<AppDataProvider>(context);
-    final user = appData.loggedInUser ?? {};
-    final assignedShops = appData.getAssignedShopsForUser(user['uid'] ?? '');
-    final isMultiShop = assignedShops.length > 1;
+    final app = context.watch<AppDataProvider>();
+    final user = app.loggedInUser ?? {};
+    final role = (user['role'] ?? 'employee').toString().toLowerCase();
 
-    // ✅ Prevent crash: only assign if not empty
-    if (_selectedShop == null && assignedShops.isNotEmpty) {
-      _selectedShop = assignedShops.first;
+    final allShops = app.shops.where((s) => s['isDeleted'] != true).toList();
+    final assigned = (user['assignedShops'] ?? const <String>[]).cast<String>();
+
+    // Employee shop options limited to assigned; admin/manager can pick any
+    final shopNames = role == 'employee'
+        ? assigned
+        : allShops.map((s) => (s['name'] ?? '').toString()).where((e) => e.isNotEmpty).toList();
+
+    final canSwitchShop = role == 'employee' && assigned.length > 1;
+
+    // If employee has 0 shops
+    if (role == 'employee' && shopNames.isEmpty) {
+      return Scaffold(
+        appBar: AppBar(
+          title: Text('${(user['name'] ?? 'Unknown').toString().trim()} | ${role.toUpperCase()}'),
+        ),
+        body: const Center(
+          child: Text(
+            'No shop assigned',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+          ),
+        ),
+      );
     }
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_isEditMode ? 'Edit Sale' : 'Add Sale'),
-        actions: [
-          PopupMenuButton<String>(
-            onSelected: (value) {
-              if (value == 'switch') {
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const ShopSelectionScreen(),
-                  ),
-                );
-              } else if (value == 'logout') {
-                Provider.of<AppDataProvider>(context, listen: false).logout();
-                Navigator.pushAndRemoveUntil(
-                  context,
-                  MaterialPageRoute(builder: (_) => const LoginScreen()),
-                  (_) => false,
-                );
-              }
-            },
-            itemBuilder: (context) => [
-              const PopupMenuItem(value: 'switch', child: Text('Switch Shop')),
-              const PopupMenuItem(value: 'logout', child: Text('Logout')),
-            ],
-          ),
-        ],
-      ),
+    // Ensure a selected shop
+    _selectedShop ??= (shopNames.isNotEmpty ? shopNames.first : null) ?? widget.shopName;
 
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Form(
-          key: _formKey,
-          child: ListView(
-            children: [
-              const Text('Select Shop'),
-              if (isMultiShop)
-                DropdownButtonFormField<String>(
-                  value: _selectedShop,
-                  items: assignedShops
-                      .map(
-                        (shopName) => DropdownMenuItem<String>(
-                          value: shopName,
-                          child: Text(shopName),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: _isShopPreselected
-                      ? null
-                      : (val) => setState(() => _selectedShop = val),
-                  decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
-                  ),
-                  validator: (val) => val == null ? 'Select a shop' : null,
-                )
-              else
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 12,
-                    horizontal: 16,
-                  ),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.grey),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(_selectedShop ?? 'No Shop Assigned'),
-                ),
-              const SizedBox(height: 16),
-              const Text('Select Date (Today or Yesterday)'),
-              Row(
+    return PopScope(
+      canPop: true,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (!didPop) {
+          final ok = await _handleBack();
+          if (ok && mounted) Navigator.of(context).maybePop();
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          centerTitle: false,
+          title: Text(
+            'Add Sale${isEdit ? " (Edit)" : ""} | ${_selectedShop ?? ""}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          actions: [
+            if (canSwitchShop)
+              TextButton.icon(
+                onPressed: _switchShopIfAllowed,
+                icon: const Icon(Icons.swap_horiz, color: Colors.white),
+                label: const Text('Switch Shop', style: TextStyle(color: Colors.white)),
+              ),
+          ],
+        ),
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Form(
+              key: _formKey,
+              child: ListView(
                 children: [
-                  ChoiceChip(
-                    label: const Text('Today'),
-                    selected: isSameDay(_selectedDate, DateTime.now()),
-                    onSelected: (_) =>
-                        setState(() => _selectedDate = DateTime.now()),
-                  ),
-                  const SizedBox(width: 10),
-                  ChoiceChip(
-                    label: const Text('Yesterday'),
-                    selected: isSameDay(
-                      _selectedDate,
-                      DateTime.now().subtract(const Duration(days: 1)),
+                  // Shop picker (admin/manager can change; employee sees read-only if 1 shop)
+                  InputDecorator(
+                    decoration: const InputDecoration(
+                      labelText: 'Shop',
+                      border: OutlineInputBorder(),
                     ),
-                    onSelected: (_) => setState(
-                      () => _selectedDate = DateTime.now().subtract(
-                        const Duration(days: 1),
-                      ),
-                    ),
+                    child: role == 'employee'
+                        ? Text(_selectedShop ?? '')
+                        : DropdownButtonHideUnderline(
+                            child: DropdownButton<String>(
+                              isExpanded: true,
+                              value: _selectedShop,
+                              items: shopNames
+                                  .map((n) => DropdownMenuItem(value: n, child: Text(n)))
+                                  .toList(),
+                              onChanged: (v) => setState(() => _selectedShop = v),
+                            ),
+                          ),
                   ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _cashC,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: false),
+                    decoration: const InputDecoration(
+                      labelText: 'Cash',
+                      prefixIcon: Icon(Icons.payments_outlined),
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (v) => (v == null || v.trim().isEmpty) ? 'Enter cash (0 if none)' : null,
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _cardC,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: false),
+                    decoration: const InputDecoration(
+                      labelText: 'Card',
+                      prefixIcon: Icon(Icons.credit_card),
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (v) => (v == null || v.trim().isEmpty) ? 'Enter card (0 if none)' : null,
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _otherC,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: false),
+                    decoration: const InputDecoration(
+                      labelText: 'Other',
+                      prefixIcon: Icon(Icons.more_horiz),
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (v) => (v == null || v.trim().isEmpty) ? 'Enter other (0 if none)' : null,
+                  ),
+                  const SizedBox(height: 20),
+                  _TotalPreview(
+                    cash: _toD(_cashC.text),
+                    card: _toD(_cardC.text),
+                    other: _toD(_otherC.text),
+                    onChanged: () => setState(() {}),
+                  ),
+                  const SizedBox(height: 24),
+                  _isSaving
+                      ? const Center(child: CircularProgressIndicator())
+                      : SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton.icon(
+                            icon: Icon(isEdit ? Icons.save : Icons.check_circle_outline),
+                            label: Text(isEdit ? 'Update Sale' : 'Submit Sale'),
+                            onPressed: _save,
+                            style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 14)),
+                          ),
+                        ),
                 ],
               ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _cashController,
-                decoration: const InputDecoration(labelText: 'Cash Amount'),
-                keyboardType: TextInputType.number,
-              ),
-              TextFormField(
-                controller: _cardController,
-                decoration: const InputDecoration(labelText: 'Card Amount'),
-                keyboardType: TextInputType.number,
-              ),
-              TextFormField(
-                controller: _otherController,
-                decoration: const InputDecoration(labelText: 'Other Amount'),
-                keyboardType: TextInputType.number,
-              ),
-              const SizedBox(height: 24),
-              _isLoading
-                  ? const Center(child: CircularProgressIndicator())
-                  : ElevatedButton(
-                      onPressed: _submitSale,
-                      child: Text(_isEditMode ? 'Update Sale' : 'Submit Sale'),
-                    ),
-            ],
+            ),
           ),
         ),
       ),
     );
   }
+}
 
-  bool isSameDay(DateTime d1, DateTime d2) {
-    return d1.year == d2.year && d1.month == d2.month && d1.day == d2.day;
+class _TotalPreview extends StatefulWidget {
+  final double cash;
+  final double card;
+  final double other;
+  final VoidCallback onChanged;
+
+  const _TotalPreview({
+    required this.cash,
+    required this.card,
+    required this.other,
+    required this.onChanged,
+  });
+
+  @override
+  State<_TotalPreview> createState() => _TotalPreviewState();
+}
+
+class _TotalPreviewState extends State<_TotalPreview> {
+  @override
+  Widget build(BuildContext context) {
+    final total = widget.cash + widget.card + widget.other;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.4),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.summarize_outlined),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'Total: Rs. ${total.toStringAsFixed(0)}',
+              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+            ),
+          ),
+          Text(DateFormat('dd MMM, yyyy  hh:mm a').format(DateTime.now())),
+        ],
+      ),
+    );
   }
 }

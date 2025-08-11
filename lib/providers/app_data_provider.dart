@@ -3,8 +3,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:developer';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class AppDataProvider extends ChangeNotifier {
+AppDataProvider() { FirebaseFirestore.instance.settings = const Settings(persistenceEnabled: true);
+  }
   Map<String, dynamic>? _loggedInUser;
   final List<Map<String, dynamic>> _orders = [];
   final List<Map<String, dynamic>> _sales = [];
@@ -16,79 +19,217 @@ class AppDataProvider extends ChangeNotifier {
   List<Map<String, dynamic>> get orders => _orders;
   Map<String, dynamic>? get loggedInUser => _loggedInUser;
 
-  void loginUser(Map<String, dynamic> user) {
-    _loggedInUser = user;
+void loginUser(Map<String, dynamic> user) {
+  final role = (user['role'] ?? user['Role'] ?? user['userRole'] ?? '')
+      .toString()
+      .toLowerCase()
+      .trim();
+
+  final assignedShops = ((user['assignedShops'] ?? []) as List)
+      .map((e) => e.toString())
+      .toList();
+
+  _loggedInUser = {
+    ...user,
+    'role': role.isEmpty ? 'employee' : role,
+    'assignedShops': assignedShops,
+  };
+  notifyListeners();
+}
+
+Future<bool> loginWithNameAndCode(String name, String code) async {
+  final nameLower = name.trim().toLowerCase();
+  final trimmedCode = code.trim();
+
+  try {
+    // Stale FirebaseAuth session (kisi purane user ka) ko hatado
+    await FirebaseAuth.instance.signOut();
+
+    // 1) loginCode se filter
+    final snapshot = await firestore
+        .collection('users')
+        .where('loginCode', isEqualTo: trimmedCode)
+        .get();
+
+    if (snapshot.docs.isEmpty) return false;
+
+    // 2) RAM me case-insensitive name match
+    final matches = snapshot.docs.where((d) {
+      final docName = (d.data()['name'] ?? '').toString().toLowerCase();
+      return docName == nameLower;
+    }).toList();
+
+    if (matches.isEmpty) return false;
+
+    final match = matches.first;
+    final data = match.data();
+
+    // normalize
+    final role = (data['role'] ?? data['Role'] ?? data['userRole'] ?? '')
+        .toString()
+        .toLowerCase()
+        .trim();
+    final assignedShops = ((data['assignedShops'] ?? []) as List)
+        .map((e) => e.toString())
+        .toList();
+
+    loginUser({
+      ...data,
+      'id': match.id,
+      'uid': match.id,
+      'role': role.isEmpty ? 'employee' : role,
+      'assignedShops': assignedShops,
+    });
+
+    // Persist as "code" session
+    await _saveSession(mode: 'code', uid: match.id);
+    return true;
+  } catch (e) {
+    debugPrint('loginWithNameAndCode error: $e');
+    return false;
+  }
+}
+
+Future<void> _saveSession({required String mode, required String uid}) async {
+  final p = await SharedPreferences.getInstance();
+  await p.setString('session_mode', mode); // 'auth' | 'code'
+  await p.setString('session_uid', uid);
+}
+
+Future<void> clearSession() async {
+  final p = await SharedPreferences.getInstance();
+  await p.remove('session_mode');
+  await p.remove('session_uid');
+}
+
+Future<void> restoreSession() async {
+  final p = await SharedPreferences.getInstance();
+  final mode = p.getString('session_mode');
+  final uid  = p.getString('session_uid');
+
+  try {
+    if (mode == 'auth') {
+      final u = FirebaseAuth.instance.currentUser;
+      if (u == null) return;
+      final snap = await firestore.collection('users').doc(u.uid).get();
+      if (!snap.exists) return;
+      final data = snap.data()!;
+      loginUser({
+        ...data,
+        'uid': u.uid,
+      });
+    } else if (mode == 'code' && uid != null && uid.isNotEmpty) {
+      final snap = await firestore.collection('users').doc(uid).get();
+      if (!snap.exists) return;
+      final data = snap.data()!;
+      loginUser({
+        ...data,
+        'uid': uid,
+      });
+    }
+  } catch (_) {/* ignore for now */}
+}
+
+// 🔎 Server-side sales query (fast, index-friendly)
+Query<Map<String, dynamic>> buildSalesQuery({
+  DateTime? from, // inclusive
+  DateTime? to,   // exclusive
+  String? shop,   // null ya 'All' => no filter
+}) {
+  var q = firestore.collection('sales').orderBy('createdAt', descending: true);
+
+  if (from != null) {
+    q = q.where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(from));
+  }
+  if (to != null) {
+    q = q.where('createdAt', isLessThan: Timestamp.fromDate(to));
+  }
+  if (shop != null && shop.isNotEmpty && shop != 'All') {
+    q = q.where('shop', isEqualTo: shop);
+  }
+  return q;
+}
+
+
+// 🧰 QDS -> Map (DateTime normalize + numeric safety)
+Map<String, dynamic> mapSaleDoc(
+  QueryDocumentSnapshot<Map<String, dynamic>> d,
+) {
+  final data = d.data();
+
+  DateTime created;
+  final raw = data['createdAt'];
+  if (raw is Timestamp) created = raw.toDate();
+  else if (raw is DateTime) created = raw;
+  else if (raw is String) created = DateTime.tryParse(raw) ?? DateTime.now();
+  else created = DateTime.now();
+
+  double toD(v) => v is num ? v.toDouble() : double.tryParse('${v ?? ""}') ?? 0.0;
+
+  return {
+    'id': d.id,
+    'shop': (data['shop'] ?? '').toString(),
+    'employee': (data['employee'] ?? data['addedBy'] ?? '').toString(),
+    'cash': toD(data['cash']),
+    'card': toD(data['card']),
+    'other': toD(data['other']),
+    'total': toD(data['total']),
+    'createdAt': created,
+    'saleDate': DateFormat('yyyy-MM-dd').format(created),
+  };
+}
+
+
+Future<bool> loginWithEmailAndPassword(String email, String password) async {
+  try {
+    final cred = await FirebaseAuth.instance.signInWithEmailAndPassword(
+      email: email.trim(),
+      password: password,
+    );
+    final u = cred.user;
+    if (u == null) return false;
+
+    final userSnap = await firestore.collection('users').doc(u.uid).get();
+    if (!userSnap.exists) return false;
+
+    final data = userSnap.data()!;
+
+    // normalize
+    final roleStr = (data['role'] ?? data['Role'] ?? data['userRole'] ?? '')
+        .toString()
+        .toLowerCase()
+        .trim();
+    final assignedShops = ((data['assignedShops'] ?? []) as List)
+        .map((e) => e.toString())
+        .toList();
+
+    _loggedInUser = {
+      ...data,
+      'uid': u.uid,
+      'role': roleStr.isEmpty ? 'employee' : roleStr,
+      'assignedShops': assignedShops,
+    };
     notifyListeners();
+
+    // Persist as "auth" session
+    await _saveSession(mode: 'auth', uid: u.uid);
+    return true;
+  } catch (e) {
+    debugPrint('loginWithEmailAndPassword error: $e');
+    return false;
   }
+}
 
-  Future<bool> loginWithNameAndCode(String name, String code) async {
-    final trimmedName = name.trim().toLowerCase(); // 🔹 safer comparison
-    final trimmedCode = code.trim();
+  String? _selectedShopId;
+  String? _selectedShopName;
 
-    try {
-      final snapshot = await FirebaseFirestore.instance
-          .collection('users')
-          .where('name', isEqualTo: trimmedName)
-          .where('loginCode', isEqualTo: trimmedCode)
-          .limit(1)
-          .get();
+  String? get selectedShopId => _selectedShopId;
+  String? get selectedShopName => _selectedShopName;
 
-      log(
-        "Trying login with name: $trimmedName and code: $trimmedCode",
-        name: 'Auth',
-      );
-
-      log("Found users: ${snapshot.docs.length}", name: 'Auth');
-
-      if (snapshot.docs.isEmpty) {
-        log("❌ No matching user found", name: 'Auth');
-
-        return false;
-      }
-
-      final userData = snapshot.docs.first.data();
-      userData['id'] = snapshot.docs.first.id;
-
-      loginUser(userData); // sets _loggedInUser and notifies listeners
-
-      log("✅ Login success: ${userData['name']}", name: 'Auth');
-      return true;
-    } catch (e) {
-      log("🔥 Login error: $e", name: 'Auth');
-      return false;
-    }
-  }
-
-  Future<bool> loginWithEmailAndPassword(String email, String password) async {
-    try {
-      final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
-      final user = credential.user;
-      if (user == null) return false;
-
-      log('Logged in UID: ${user.uid}', name: 'Auth');
-
-      final snapshot = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .get();
-
-      if (!snapshot.exists) {
-        log('User document not found in Firestore', name: 'Auth');
-        return false;
-      }
-
-      log('Fetched user data: ${snapshot.data()}', name: 'Auth');
-
-      _loggedInUser = snapshot.data()!..['uid'] = user.uid;
-      notifyListeners();
-      return true;
-    } catch (e) {
-      log('Login failed: $e', name: 'Auth');
-      return false;
-    }
+  void setSelectedShop(String shopId, String shopName) {
+    _selectedShopId = shopId;
+    _selectedShopName = shopName;
+    notifyListeners();
   }
 
   List<Map<String, dynamic>> get editRequests => _editRequests;
@@ -108,10 +249,18 @@ class AppDataProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void logout() {
-    _loggedInUser = null;
-    notifyListeners();
-  }
+  Future<void> logout() async {
+  try {
+    await FirebaseAuth.instance.signOut();
+  } catch (_) {}
+  _loggedInUser = null;
+  _selectedShopId = null;
+  _selectedShopName = null;
+  await clearSession();
+  notifyListeners();
+}
+
+
 
   void addEmployee(Map<String, dynamic> employeeData) {
     if (employeeData.isNotEmpty) {
@@ -254,18 +403,21 @@ class AppDataProvider extends ChangeNotifier {
     }
   }
 
-  List<String> getAssignedShopsForUser(String userId) {
-    final user = employees.firstWhere(
-      (emp) => emp['uid'] == userId,
-      orElse: () => {},
-    );
+List<String> getAssignedShopsForUser(String userId) {
+  // try employees list first
+  final emp = employees.firstWhere(
+    (e) => e['uid'] == userId,
+    orElse: () => {},
+  );
+  List list = emp['assignedShops'] ?? [];
 
-    final assigned = user['assignedShops'] ?? [];
-    if (assigned is List) {
-      return List<String>.from(assigned.map((s) => s.toString()));
-    }
-    return [];
+  // fallback to _loggedInUser if matching uid
+  if ((list.isEmpty) && _loggedInUser != null && _loggedInUser!['uid'] == userId) {
+    list = (_loggedInUser!['assignedShops'] ?? []) as List;
   }
+
+  return list.map((e) => e.toString()).toList();
+}
 
   void assignAccess(String shopName, String employeeName) {
     final shopIndex = shops.indexWhere((shop) => shop['name'] == shopName);
@@ -297,15 +449,32 @@ class AppDataProvider extends ChangeNotifier {
   //       notifyListeners();
   //     }
   //   }
-  Future<void> fetchEmployees() async {
+Future<void> fetchEmployees() async {
+  try {
     final snapshot = await FirebaseFirestore.instance
         .collection('employees')
         .get();
-    employees = snapshot.docs
-        .map((doc) => {'uid': doc.id, ...doc.data()})
-        .toList();
+
+    employees = snapshot.docs.map((doc) {
+      final data = doc.data();
+      return {
+        'uid': doc.id,
+        ...data,
+        'role': (data['role'] ?? data['Role'] ?? data['userRole'] ?? '')
+            .toString()
+            .toLowerCase()
+            .trim(),
+        'assignedShops': ((data['assignedShops'] ?? []) as List)
+            .map((e) => e.toString())
+            .toList(),
+      };
+    }).toList();
+
     notifyListeners();
+  } catch (e) {
+    log('Error fetching employees: $e', name: 'Employees');
   }
+}
 
   Future<void> deleteShopByName(String shopName) async {
     try {
@@ -458,13 +627,14 @@ class AppDataProvider extends ChangeNotifier {
     }
   }
 
-  bool canEditOrder(Map<String, dynamic> order) {
-    final createdAt = order['createdAt'] as DateTime?;
-    if (createdAt == null) return false;
-
-    final diff = DateTime.now().difference(createdAt);
-    return diff.inMinutes <= 10;
-  }
+bool canEditOrder(Map<String, dynamic> order) {
+  final raw = order['createdAt'];
+  DateTime? createdAt;
+  if (raw is DateTime) createdAt = raw;
+  else if (raw is Timestamp) createdAt = raw.toDate();
+  if (createdAt == null) return false;
+  return DateTime.now().difference(createdAt).inMinutes <= 10;
+}
 
   List<Map<String, dynamic>> getEmployeeOrders(String employeeName) {
     return _orders
@@ -490,55 +660,61 @@ class AppDataProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> addSale(Map<String, dynamic> saleData) async {
-    saleData['createdAt'] = Timestamp.now();
-    if (saleData.isNotEmpty && saleData['total'] != null) {
-      try {
-        final docRef = await FirebaseFirestore.instance
-            .collection('sales')
-            .add(saleData);
-        saleData['id'] = docRef.id; // store firestore ID as 'id'
-        _sales.add(saleData);
-        notifyListeners();
-      } catch (e) {
-        log('Error adding sale: $e');
-      }
+Future<void> addSale(Map<String, dynamic> saleData) async {
+  final ts = Timestamp.now();
+  saleData['createdAt'] = ts;
+
+  if (saleData.isNotEmpty && saleData['total'] != null) {
+    try {
+      final docRef = await FirebaseFirestore.instance
+          .collection('sales')
+          .add(saleData);
+
+      saleData['id'] = docRef.id;
+
+      // ✅ Local list me DateTime push (not Timestamp)
+      _sales.add({
+        ...saleData,
+        'createdAt': ts.toDate(),
+      });
+      notifyListeners();
+    } catch (e) {
+      log('Error adding sale: $e');
     }
   }
+}
 
   List<Map<String, dynamic>> get salesEditRequests =>
       _editRequests.where((r) => r['type'] == 'sale').toList();
 
-  Future<void> approveSaleEdit(String firebaseId) async {
-    try {
-      final reqIndex = _editRequests.indexWhere(
-        (r) => r['firebaseId'] == firebaseId,
-      );
-      if (reqIndex == -1) return;
+Future<void> approveSaleEdit(String firebaseId) async {
+  try {
+    final reqIndex = _editRequests.indexWhere((r) => r['firebaseId'] == firebaseId);
+    if (reqIndex == -1) return;
 
-      final request = _editRequests[reqIndex];
-      final itemId = request['itemId'];
-      final newAmount = request['newAmount'];
+    final request = _editRequests[reqIndex];
+    final itemId = request['itemId'].toString();
+    final newAmount = (request['newAmount'] as num).toDouble();
 
-      // Update sale amount in Firebase
-      await FirebaseFirestore.instance.collection('sales').doc(itemId).update({
-        'amount': newAmount,
-      });
+    // Update sale 'total' (app uses 'total' consistently)
+    await FirebaseFirestore.instance.collection('sales').doc(itemId).update({
+      'total': newAmount,
+      'editedAt': Timestamp.now(),
+    });
 
-      // Mark request as approved
-      await FirebaseFirestore.instance
-          .collection('editRequests')
-          .doc(firebaseId)
-          .update({'status': 'approved'});
+    // Mark request as approved
+    await FirebaseFirestore.instance
+        .collection('editRequests')
+        .doc(firebaseId)
+        .update({'status': 'approved'});
 
-      // Refresh locally
-      await fetchEditRequests();
-      await fetchSales();
-      notifyListeners();
-    } catch (e) {
-      log('Error approving sale edit: $e', name: 'Sales');
-    }
+    await fetchEditRequests();
+    await fetchSales();
+    notifyListeners();
+  } catch (e) {
+    log('Error approving sale edit: $e', name: 'Sales');
   }
+}
 
   /// Reject a sale‑edit request (just removes it)
   Future<void> rejectSaleEdit(String firebaseId) async {
@@ -563,7 +739,7 @@ class AppDataProvider extends ChangeNotifier {
     if (_loggedInUser == null) return;
 
     final updates = <String, dynamic>{};
-    final userDocId = _loggedInUser!['id'];
+    final userDocId = _loggedInUser!['uid'];
 
     // 🔹 Update email and phone in Firestore
     if (email != null) {
@@ -701,6 +877,15 @@ class AppDataProvider extends ChangeNotifier {
     }
   }
 
+  String? getShopNameById(String shopId) {
+    try {
+      final shop = shops.firstWhere((shop) => shop['id'] == shopId);
+      return shop['name'];
+    } catch (e) {
+      return null;
+    }
+  }
+
   Future<void> rejectEditRequest(String requestId) async {
     try {
       await FirebaseFirestore.instance
@@ -717,77 +902,111 @@ class AppDataProvider extends ChangeNotifier {
   }
 
   Future<void> fetchUsers() async {
-    try {
-      final snapshot = await FirebaseFirestore.instance
-          .collection('users')
-          .get();
-      employees.clear();
-      employees.addAll(snapshot.docs.map((doc) => doc.data()));
-    } catch (e) {
-      log('Error fetching users: $e', name: 'Users');
-    }
+  try {
+    final snapshot = await firestore.collection('users').get();
+    employees = snapshot.docs.map((doc) {
+      final data = doc.data();
+      return {
+        'uid': doc.id,
+        ...data,
+        'role': (data['role'] ?? data['Role'] ?? data['userRole'] ?? '')
+            .toString()
+            .toLowerCase()
+            .trim(),
+        'assignedShops': ((data['assignedShops'] ?? []) as List)
+            .map((e) => e.toString())
+            .toList(),
+      };
+    }).toList();
+    notifyListeners();
+  } catch (e) {
+    log('Error fetching users: $e', name: 'Users');
   }
+}
 
   Future<void> fetchShops() async {
-    final snapshot = await FirebaseFirestore.instance.collection('shops').get();
-    shops = snapshot.docs
-        .map((doc) => doc.data())
-        .where((shop) => shop['isDeleted'] != true) // ✅ Ignore deleted shops
-        .toList();
+    final snapshot = await firestore.collection('shops').get();
+    shops = snapshot.docs.map((doc) {
+      return {...doc.data(), 'id': doc.id};
+    }).toList();
     notifyListeners();
   }
 
-  Future<void> fetchOrders() async {
-    try {
-      final snapshot = await FirebaseFirestore.instance
-          .collection('orders')
-          .get();
-      _orders.clear();
-      _orders.addAll(snapshot.docs.map((doc) => doc.data()));
-    } catch (e) {
-      log('Error fetching orders: $e', name: 'Orders');
-    }
+Future<void> fetchOrders() async {
+  try {
+    final snap = await FirebaseFirestore.instance
+        .collection('orders')
+        .get();
+
+    _orders
+      ..clear()
+      ..addAll(snap.docs.map((d) {
+        final data = d.data();
+        final raw = data['createdAt'];
+
+        DateTime? createdAt;
+        if (raw is Timestamp) {
+          createdAt = raw.toDate();
+        } else if (raw is DateTime) {
+          createdAt = raw;
+        } else if (raw is String) {
+          createdAt = DateTime.tryParse(raw);
+        }
+
+        return {
+          'id': d.id,
+          ...data,
+          'createdAt': createdAt,
+        };
+      }));
+    notifyListeners();
+  } catch (e) {
+    log('Error fetching orders: $e', name: 'Orders');
   }
+}
 
   Future<void> fetchSales() async {
-    try {
-      final snapshot = await FirebaseFirestore.instance
-          .collection('sales')
-          .get();
+  try {
+    final snap = await FirebaseFirestore.instance.collection('sales').get();
 
-      _sales.clear();
-      _sales.addAll(
-        snapshot.docs.map((doc) {
-          final data = doc.data();
-          final rawDate = data['createdAt'];
-          DateTime? saleDate;
+    _sales
+      ..clear()
+      ..addAll(snap.docs.map((doc) {
+        final data = doc.data();
 
-          if (rawDate is Timestamp) {
-            saleDate = rawDate.toDate();
-          } else if (rawDate is String) {
-            saleDate = DateTime.tryParse(rawDate);
-          }
+        // createdAt normalization
+        DateTime? created;
+        final raw = data['createdAt'];
+        if (raw is Timestamp) {
+          created = raw.toDate();
+        } else if (raw is DateTime) {
+          created = raw;
+        } else if (raw is String) {
+          created = DateTime.tryParse(raw);
+        }
+        // fallback(s)
+        created ??= DateTime.tryParse('${data['date'] ?? ''}') ?? DateTime.now();
 
-          return {
-            'id': doc.id,
-            'shop': data['shop'] ?? '',
-            'employee': data['employee'] ?? '',
-            'cash': (data['cash'] ?? 0).toDouble(),
-            'card': (data['card'] ?? 0).toDouble(),
-            'other': (data['other'] ?? 0).toDouble(),
-            'total': (data['total'] ?? 0).toDouble(),
-            'saleDate': saleDate != null
-                ? DateFormat('yyyy-MM-dd').format(saleDate)
-                : '',
-            'createdAt': saleDate,
-          };
-        }),
-      );
-      notifyListeners();
-    } catch (e) {
-      log('Error fetching sales: $e', name: 'Sales');
-    }
+        double numOrZero(v) =>
+            v is num ? v.toDouble() : double.tryParse(v?.toString() ?? '') ?? 0.0;
+
+        return {
+          'id': doc.id,
+          'shop': (data['shop'] ?? '').toString(),
+          'employee': (data['employee'] ?? data['addedBy'] ?? '').toString(),
+          'cash': numOrZero(data['cash']),
+          'card': numOrZero(data['card']),
+          'other': numOrZero(data['other']),
+          'total': numOrZero(data['total']),
+          'createdAt': created, // DateTime (not Timestamp)
+          'saleDate': DateFormat('yyyy-MM-dd').format(created),
+        };
+      }));
+    notifyListeners();
+  } catch (e) {
+    log('Error fetching sales: $e', name: 'Sales');
   }
+}
 
   Future<void> fetchEditRequests() async {
     try {
@@ -812,150 +1031,148 @@ class AppDataProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> updateShopAssignments({
-    required String userId,
-    required String userName,
-    required List<String> newAssignedShops,
-  }) async {
-    try {
-      final employeeDoc = await firestore
-          .collection('employees')
-          .doc(userId)
-          .get();
-      final oldAssignedShops = List<String>.from(
-        employeeDoc.data()?['assignedShops'] ?? [],
-      );
+Future<void> updateShopAssignments({
+  required String userId,           // uid of employee/manager
+  required String userName,         // display name (used in shops.employees[])
+  required List<String> newAssignedShops, // shop NAMES as per your schema
+}) async {
+  // Normalize desired list
+  final desired = newAssignedShops
+      .map((s) => s.trim())
+      .where((s) => s.isNotEmpty)
+      .toSet();
 
-      // Step 1: Remove employee from shops they are unassigned from
-      for (final oldShop in oldAssignedShops) {
-        if (!newAssignedShops.contains(oldShop)) {
-          final query = await firestore
-              .collection('shops')
-              .where('name', isEqualTo: oldShop)
-              .limit(1)
-              .get();
+  // Current assignments from employees/{uid}
+  final empRef = firestore.collection('employees').doc(userId);
+  final empSnap = await empRef.get();
+  final currentList = List<String>.from(empSnap.data()?['assignedShops'] ?? const []);
+  final current = currentList.map((s) => s.trim()).where((s) => s.isNotEmpty).toSet();
 
-          if (query.docs.isNotEmpty) {
-            final shopDoc = query.docs.first;
-            final List<dynamic> currentEmployees = List.from(
-              shopDoc['employees'] ?? [],
-            );
-            currentEmployees.remove(userName);
+  final toRemove = current.difference(desired);
+  final toAdd    = desired.difference(current);
 
-            await firestore.collection('shops').doc(shopDoc.id).update({
-              'employees': currentEmployees,
-              'updatedAt': DateTime.now(),
-            });
-          }
-        }
-      }
+  final batch = firestore.batch();
 
-      // Step 2: Add employee to newly assigned shops
-      for (final newShop in newAssignedShops) {
-        if (!oldAssignedShops.contains(newShop)) {
-          final query = await firestore
-              .collection('shops')
-              .where('name', isEqualTo: newShop)
-              .limit(1)
-              .get();
-
-          if (query.docs.isNotEmpty) {
-            final shopDoc = query.docs.first;
-            final List<dynamic> currentEmployees = List.from(
-              shopDoc['employees'] ?? [],
-            );
-            if (!currentEmployees.contains(userName)) {
-              currentEmployees.add(userName);
-            }
-
-            await firestore.collection('shops').doc(shopDoc.id).update({
-              'employees': currentEmployees,
-              'updatedAt': DateTime.now(),
-            });
-          }
-        }
-      }
-
-      // Step 3: Update employee and user documents with new shop list
-      await firestore.collection('employees').doc(userId).update({
-        'assignedShops': newAssignedShops,
+  // 1) Remove employee name from shops where unassigned now
+  for (final oldShopName in toRemove) {
+    final q = await firestore
+        .collection('shops')
+        .where('name', isEqualTo: oldShopName)
+        .limit(1)
+        .get();
+    if (q.docs.isNotEmpty) {
+      final shopRef = q.docs.first.reference;
+      batch.update(shopRef, {
+        'employees': FieldValue.arrayRemove([userName]),
         'updatedAt': DateTime.now(),
       });
-
-      final userDoc = await firestore
-          .collection('users')
-          .where('name', isEqualTo: userName)
-          .limit(1)
-          .get();
-
-      if (userDoc.docs.isNotEmpty) {
-        await firestore.collection('users').doc(userDoc.docs.first.id).update({
-          'assignedShops': newAssignedShops,
-          'updatedAt': DateTime.now(),
-        });
-      }
-
-      notifyListeners();
-    } catch (e) {
-      log('❌ Error updating assignments: $e');
     }
   }
 
-  void startFirebaseListeners() {
-    FirebaseFirestore.instance.collection('shops').snapshots().listen((
-      snapshot,
-    ) {
-      shops = snapshot.docs.map((doc) => doc.data()).toList();
-      notifyListeners();
-    });
-
-    FirebaseFirestore.instance.collection('employees').snapshots().listen((
-      snapshot,
-    ) {
-      employees = snapshot.docs.map((doc) => doc.data()).toList();
-      notifyListeners();
-    });
-
-    FirebaseFirestore.instance.collection('orders').snapshots().listen((
-      snapshot,
-    ) {
-      _orders.clear();
-      _orders.addAll(snapshot.docs.map((doc) => doc.data()));
-      notifyListeners();
-    });
-
-    FirebaseFirestore.instance.collection('sales').snapshots().listen((
-      snapshot,
-    ) {
-      _sales.clear();
-      _sales.addAll(
-        snapshot.docs.map((doc) {
-          final data = doc.data();
-          final rawCreatedAt = data['createdAt'];
-          DateTime? createdAt;
-
-          if (rawCreatedAt is Timestamp) {
-            createdAt = rawCreatedAt.toDate();
-          } else if (rawCreatedAt is DateTime) {
-            createdAt = rawCreatedAt;
-          } else if (rawCreatedAt is String) {
-            createdAt = DateTime.tryParse(rawCreatedAt);
-          } else {
-            createdAt = null;
-          }
-
-          return {'id': doc.id, ...data, 'createdAt': createdAt};
-        }),
-      );
-      notifyListeners();
-    });
-
-    FirebaseFirestore.instance.collection('editRequests').snapshots().listen((
-      snapshot,
-    ) {
-      _editRequests.clear();
-      _editRequests.addAll(snapshot.docs.map((doc) => doc.data()));
-      notifyListeners();
-    });
+  // 2) Add employee name to shops where newly assigned
+  for (final newShopName in toAdd) {
+    final q = await firestore
+        .collection('shops')
+        .where('name', isEqualTo: newShopName)
+        .limit(1)
+        .get();
+    if (q.docs.isNotEmpty) {
+      final shopRef = q.docs.first.reference;
+      batch.update(shopRef, {
+        'employees': FieldValue.arrayUnion([userName]),
+        'updatedAt': DateTime.now(),
+      });
+    }
   }
+
+  // 3) Update employees/{uid}
+  batch.update(empRef, {
+    'assignedShops': desired.toList(),
+    'updatedAt': DateTime.now(),
+  });
+
+  // 4) Update users/{uid} — name se query nahi, direct by uid
+  final userRef = firestore.collection('users').doc(userId);
+  batch.update(userRef, {
+    'assignedShops': desired.toList(),
+    'updatedAt': DateTime.now(),
+  });
+
+  // Commit atomically
+  await batch.commit();
+
+  // Local cache refresh (best-effort)
+  try {
+    final i = employees.indexWhere((e) => e['uid'] == userId);
+    if (i != -1) {
+      employees[i] = {
+        ...employees[i],
+        'assignedShops': desired.toList(),
+      };
+    }
+    notifyListeners();
+  } catch (_) {
+    // Listeners/fetch will refresh anyway
+  }
+}
+
+void startFirebaseListeners() {
+  // Shops with id
+  firestore.collection('shops').snapshots().listen((snapshot) {
+    shops = snapshot.docs.map((d) => {'id': d.id, ...d.data()}).toList();
+    notifyListeners();
+  });
+
+  // Employees with uid + normalized role/assignedShops
+  firestore.collection('employees').snapshots().listen((snapshot) {
+    employees = snapshot.docs.map((d) {
+      final data = d.data();
+      return {
+        'uid': d.id,
+        ...data,
+        'role': (data['role'] ?? data['Role'] ?? data['userRole'] ?? '')
+            .toString()
+            .toLowerCase()
+            .trim(),
+        'assignedShops': ((data['assignedShops'] ?? []) as List)
+            .map((e) => e.toString())
+            .toList(),
+      };
+    }).toList();
+    notifyListeners();
+  });
+
+  // Orders with id
+  firestore.collection('orders').snapshots().listen((snapshot) {
+    _orders
+      ..clear()
+      ..addAll(snapshot.docs.map((d) => {'id': d.id, ...d.data()}));
+    notifyListeners();
+  });
+
+  // Sales with id + createdAt as DateTime
+  firestore.collection('sales').snapshots().listen((snapshot) {
+    _sales
+      ..clear()
+      ..addAll(snapshot.docs.map((d) {
+        final data = d.data();
+        final raw = data['createdAt'];
+        DateTime? createdAt;
+        if (raw is Timestamp) createdAt = raw.toDate();
+        else if (raw is DateTime) createdAt = raw;
+        else if (raw is String) createdAt = DateTime.tryParse(raw);
+        return {'id': d.id, ...data, 'createdAt': createdAt};
+      }));
+    notifyListeners();
+  });
+
+  // Edit requests with firebaseId
+  firestore.collection('editRequests').snapshots().listen((snapshot) {
+    _editRequests
+      ..clear()
+      ..addAll(snapshot.docs.map((d) => {'firebaseId': d.id, ...d.data()}));
+    notifyListeners();
+  });
+}
+
 }

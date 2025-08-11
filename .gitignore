@@ -43,3 +43,31 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Flutter/IDE extras
+.metadata
+.vscode/
+android/.gradle/
+
+# iOS CocoaPods (usually not tracked)
+ios/Pods/
+
+# Build artifacts / packages
+*.apk
+*.aab
+*.ipa
+*.xcarchive
+*.symbols
+*.map.json
+
+# Local keys / keystores (NEVER commit)
+key.properties
+**/*.keystore
+**/*.jks
+**/*.p12
+
+# Dumps
+*.zip
+*.log
+lib/utils/logger.dart
+lib/utils/shop_metrics_helper.dart

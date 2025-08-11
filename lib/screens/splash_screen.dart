@@ -1,11 +1,12 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:provider/provider.dart';
+import '../providers/app_data_provider.dart';
+
 import 'login_screen.dart';
 import 'home_screen.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import '../providers/app_data_provider.dart';
-import 'package:provider/provider.dart';
+import 'add_sale_screen.dart';
+import 'shop_selection_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -16,65 +17,71 @@ class SplashScreen extends StatefulWidget {
 
 class _SplashScreenState extends State<SplashScreen> {
   bool _hasError = false;
-  late Timer _timer;
+  Timer? _timer;
 
   @override
   void initState() {
     super.initState();
-    _startTimer();
+    _start();
   }
 
-  void _startTimer() {
+  void _start() {
     setState(() => _hasError = false);
-    _timer = Timer(const Duration(seconds: 2), _navigate);
+    _timer?.cancel();
+    _timer = Timer(const Duration(milliseconds: 800), _navigate);
   }
 
   Future<void> _navigate() async {
     try {
-      final user = FirebaseAuth.instance.currentUser;
+      final appData = context.read<AppDataProvider>();
 
-      if (user != null) {
-        // 🔄 Get user by email (not UID as document ID)
-        final querySnapshot = await FirebaseFirestore.instance
-            .collection('users')
-            .where('email', isEqualTo: user.email)
-            .limit(1)
-            .get();
+      // NOTE: main.dart me AppDataProvider()..restoreSession() call ho raha.
+      // yahan thoda sa wait + data warmup:
+      await Future.delayed(const Duration(milliseconds: 150));
+      await appData.fetchAllData();
+      appData.startFirebaseListeners();
 
-        if (querySnapshot.docs.isNotEmpty) {
-          final userDoc = querySnapshot.docs.first;
-          final userData = userDoc.data();
-          userData['id'] = userDoc.id;
-
-          if (!mounted) return;
-          final appData = Provider.of<AppDataProvider>(context, listen: false);
-          appData.loginUser(userData);
-          await appData.fetchAllData();
-          appData.startFirebaseListeners();
-        } else {
-          // User authenticated but not found in Firestore
-          setState(() => _hasError = true);
-          return;
-        }
-      }
-
-      final nextScreen = user != null
-          ? const HomeScreen()
-          : const LoginScreen();
+      final user = appData.loggedInUser;
 
       if (!mounted) return;
+      if (user == null) {
+        // -> Login
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const LoginScreen()),
+        );
+        return;
+      }
+
+      final role = (user['role'] ?? '').toString().toLowerCase();
+      final assignedShops =
+          (user['assignedShops'] as List? ?? []).map((e) => e.toString()).toList();
+
+      Widget next;
+
+      if (role == 'employee') {
+        if (assignedShops.length == 1) {
+          next = AddSaleScreen(shopName: assignedShops.first);
+        } else {
+          next = const ShopSelectionScreen(); // 0 ya >1 → yahan handle
+        }
+      } else {
+        next = const HomeScreen();
+      }
+
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => nextScreen),
+        MaterialPageRoute(builder: (_) => next),
       );
     } catch (e) {
+      if (!mounted) return;
       setState(() => _hasError = true);
     }
   }
 
   @override
   void dispose() {
-    _timer.cancel();
+    _timer?.cancel();
     super.dispose();
   }
 
@@ -102,7 +109,7 @@ class _SplashScreenState extends State<SplashScreen> {
                     ),
                     const SizedBox(height: 8),
                     ElevatedButton(
-                      onPressed: _startTimer,
+                      onPressed: _start,
                       child: const Text('Retry'),
                     ),
                   ],

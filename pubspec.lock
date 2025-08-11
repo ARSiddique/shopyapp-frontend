@@ -424,6 +424,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.0.3"
+  open_file_macos:
+    dependency: "direct overridden"
+    description:
+      name: open_file_macos
+      sha256: "7109f82cbb0103d5875959a4fd7346efa9eb7c83c015ff2a9488b630046ad712"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.2.0"
   open_file_platform_interface:
     dependency: transitive
     description:

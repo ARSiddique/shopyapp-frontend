@@ -1,94 +1,158 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_data_provider.dart';
-import 'add_sale_screen.dart';
+import '../screens/splash_screen.dart';
 
-class ShopSelectionScreen extends StatelessWidget {
+class ShopSelectionScreen extends StatefulWidget {
   const ShopSelectionScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final appData = Provider.of<AppDataProvider>(context);
-    final shops = appData.shops.where((shop) {
-      final assignedShopIds = (appData.loggedInUser?['assignedShops'] ?? [])
-          .cast<String>();
-      return assignedShopIds.contains(shop['id']);
-    }).toList();
+  State<ShopSelectionScreen> createState() => _ShopSelectionScreenState();
+}
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Select Shop'),
-        automaticallyImplyLeading: false,
-      ),
-      body: shops.isEmpty
-          ? const Center(child: Text('No shop assigned.'))
-          : LayoutBuilder(
-              builder: (context, constraints) {
-                final isWide = constraints.maxWidth > 600;
-                return Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: isWide
-                      ? GridView.count(
-                          crossAxisCount: 2,
-                          crossAxisSpacing: 16,
-                          mainAxisSpacing: 16,
-                          children: shops
-                              .map((shop) => _buildShopCard(context, shop))
-                              .toList(),
-                        )
-                      : ListView.builder(
-                          itemCount: shops.length,
-                          itemBuilder: (_, index) =>
-                              _buildShopCard(context, shops[index]),
-                        ),
-                );
-              },
-            ),
-    );
+class _ShopSelectionScreenState extends State<ShopSelectionScreen> {
+  bool _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    Future.microtask(() async {
+      final app = Provider.of<AppDataProvider>(context, listen: false);
+      if (app.shops.isEmpty) {
+        setState(() => _loading = true);
+        await app.fetchShops();
+        setState(() => _loading = false);
+      }
+    });
   }
 
-  Widget _buildShopCard(BuildContext context, Map<String, dynamic> shop) {
-    return Card(
-      elevation: 4,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: InkWell(
-        onTap: () {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(
-              builder: (_) => AddSaleScreen(selectedShopId: shop['id']),
-            ),
-          );
-        },
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(20.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(
-                Icons.store,
-                size: 40,
-                color: Theme.of(context).primaryColor,
-              ),
-              const SizedBox(height: 10),
-              Text(
-                shop['name'] ?? 'Unnamed Shop',
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 5),
-              Text(
-                shop['location'] ?? '',
-                style: const TextStyle(fontSize: 14),
-              ),
-            ],
-          ),
+  Future<void> _refresh() async {
+    final app = Provider.of<AppDataProvider>(context, listen: false);
+    await app.fetchShops();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final app = Provider.of<AppDataProvider>(context);
+    final user = app.loggedInUser ?? {};
+    final name = (user['name'] ?? 'Unknown').toString();
+    final role = (user['role'] ?? '').toString();
+    final assignedShops =
+        (user['assignedShops'] as List? ?? []).map((e) => e.toString()).toList();
+
+    return Scaffold(
+    appBar: AppBar(
+  centerTitle: false, // ✅ left aligned
+  titleSpacing: 8,    // thora sa left padding
+  title: Row(
+    children: [
+      Flexible(
+        child: Text(
+          '${name.trim().isEmpty ? 'Unknown' : name.trim()} | ${role.toString().toUpperCase()}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis, // ✅ responsive truncation
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
         ),
       ),
+    ],
+  ),
+actions: [
+  IconButton(
+    tooltip: 'Logout',
+    icon: const Icon(Icons.logout),
+    onPressed: () async {
+      final confirm = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false, // accidental dismiss na ho
+        builder: (ctx) => AlertDialog(
+          title: const Text('Logout'),
+          content: const Text('Are you sure you want to logout?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Logout')),
+          ],
+        ),
+      );
+
+      if (confirm != true) return;
+
+      await app.logout();           // <-- Provider logout (clears session + notifies)
+      if (!mounted) return;
+
+      // ✅ Purani stack hatao aur Splash/Login dikhao
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const SplashScreen()), // ya LoginScreen()
+        (route) => false,
+      );
+    },
+  ),
+],
+
+),
+
+
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _refresh,
+              child: assignedShops.isEmpty
+                  ? ListView( // RefreshIndicator needs scrollable
+                      children: const [
+                        SizedBox(height: 120),
+                        Center(
+                          child: Text(
+                            'Shop Not Assigned',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                  : ListView.separated(
+                      padding: const EdgeInsets.all(12),
+                      itemCount: assignedShops.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 8),
+                      itemBuilder: (_, i) {
+                        final shopName = assignedShops[i];
+
+                        // shops collection se id nikaal lo (name match)
+                        final shop = app.shops.firstWhere(
+                          (s) => (s['name'] ?? '') == shopName,
+                          orElse: () => {},
+                        );
+                        final shopId = (shop['id'] ?? shopName).toString();
+
+                        return Card(
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            side: BorderSide(
+                              color: Theme.of(context)
+                                  .dividerColor
+                                  .withOpacity(0.4),
+                            ),
+                          ),
+                          child: ListTile(
+                            title: Text(shopName),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () {
+                              app.setSelectedShop(shopId, shopName);
+
+                              // 👉 TODO: yahan apni Add Sale / Home route pe redirect karo:
+                              // Navigator.pushReplacement(
+                              //   context,
+                              //   MaterialPageRoute(
+                              //     builder: (_) => AddSaleScreen(selectedShopName: shopName),
+                              //   ),
+                              // );
+                            },
+                          ),
+                        );
+                      },
+                    ),
+            ),
     );
   }
 }

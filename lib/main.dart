@@ -9,13 +9,16 @@ import 'screens/splash_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
   await Firebase.initializeApp();
 
   runApp(
     MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => AppDataProvider()),
+        // ⬇️ AppDataProvider created with session restore on boot
+        ChangeNotifierProvider(
+          create: (_) => AppDataProvider()..restoreSession(),
+          // lazy: false, // <-- agar chaho ke turant create ho (optional)
+        ),
         ChangeNotifierProvider(create: (_) => ThemeProvider()),
       ],
       child: const MyApp(),
@@ -36,7 +39,7 @@ class MyApp extends StatelessWidget {
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
       themeMode: themeProvider.themeMode,
-      home: const SplashScreen(),
+      home: const SplashScreen(), // SplashScreen me provider.loggedInUser check kara lena
     );
   }
 }
