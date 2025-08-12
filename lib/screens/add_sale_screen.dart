@@ -1,4 +1,3 @@
-// lib/screens/add_sale_screen.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,10 +5,12 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/app_data_provider.dart';
+import 'shop_selection_screen.dart';
+import 'login_screen.dart';
 
 class AddSaleScreen extends StatefulWidget {
   final Map<String, dynamic>? existingSale; // edit flow
-  final String? shopName;                   // optional: lock to a shop
+  final String? shopName;                   // for employee flow (locked from selection)
 
   const AddSaleScreen({super.key, this.existingSale, this.shopName});
 
@@ -45,7 +46,6 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     _cardC.text = _numToText(s['card']);
     _otherC.text = _numToText(s['other']);
 
-    // Decide today/yesterday by createdAt
     final dt = s['createdAt'] is DateTime
         ? s['createdAt'] as DateTime
         : (s['createdAt'] is Timestamp
@@ -54,14 +54,8 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     final today = DateTime.now();
     final base = DateTime(today.year, today.month, today.day);
     final d = DateTime(dt.year, dt.month, dt.day);
-    if (d == base) {
-      _dayChoice = 'today';
-    } else if (d == base.subtract(const Duration(days: 1))) {
-      _dayChoice = 'yesterday';
-    } else {
-      // edit for older day → we keep createdAt on update, just leave toggle on 'today' visually
-      _dayChoice = 'today';
-    }
+    if (d == base) _dayChoice = 'today';
+    else if (d == base.subtract(const Duration(days: 1))) _dayChoice = 'yesterday';
   }
 
   @override
@@ -72,15 +66,14 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     super.dispose();
   }
 
-  // ---------------- UI ----------------
-
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppDataProvider>();
     final me = app.loggedInUser ?? {};
     final role = (me['role'] ?? '').toString().toLowerCase();
+    final isEmployee = role == 'employee';
 
-    // Build shops list
+    // All active shop names (sorted)
     final allShops = app.shops
         .where((s) => (s['isDeleted'] ?? false) != true)
         .map((s) => (s['name'] ?? '').toString())
@@ -88,112 +81,161 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
         .toList()
       ..sort();
 
+    // Employee assigned shops
     final assigned = (me['assignedShops'] as List? ?? [])
         .map((e) => e.toString())
         .where((e) => e.isNotEmpty)
         .toSet();
 
-    // Admin/Manager → all shops; Employee → assigned only
-    final shopOptions = (role == 'admin' || role == 'manager')
-        ? allShops
-        : allShops.where((s) => assigned.contains(s)).toList();
+    // Shop options per role
+    final shopOptions = isEmployee
+        ? allShops.where((s) => assigned.contains(s)).toList()
+        : allShops;
 
-    // Lock by widget.shopName if provided
-    final bool lockShop = widget.shopName?.isNotEmpty == true;
-    if (lockShop && (shopOptions.contains(widget.shopName) || (role == 'admin' || role == 'manager'))) {
-      _selectedShop = widget.shopName;
-    }
-
-    // Default selected if still null
+    // Decide selected shop (priority: existingSale -> widget.shopName -> assigned(only) -> first)
     _selectedShop ??= (widget.existingSale?['shop']?.toString().isNotEmpty == true)
         ? widget.existingSale!['shop'].toString()
-        : (shopOptions.isNotEmpty ? shopOptions.first : null);
+        : (widget.shopName?.isNotEmpty == true
+            ? widget.shopName
+            : (shopOptions.isNotEmpty ? shopOptions.first : null));
+
+    // Employee navigation/locking logic
+    final hasMultipleAssigned = isEmployee && shopOptions.length > 1;
+    final shouldShowBackToSelection = isEmployee && hasMultipleAssigned;
+    final appBarTitleShop = _selectedShop ?? '—';
 
     final isEditing = widget.existingSale != null;
-
     final total = _parse(_cashC.text) + _parse(_cardC.text) + _parse(_otherC.text);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(isEditing ? 'Edit Sale' : 'Add Sale'),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: shopOptions.isEmpty && !isEditing
-            ? const Center(child: Text('No shop available to add a sale.'))
-            : Form(
-                key: _formKey,
-                child: ListView(
-                  children: [
-                    // Shop (dropdown or locked display)
-                    if (!lockShop)
-                      DropdownButtonFormField<String>(
-                        value: (_selectedShop != null && shopOptions.contains(_selectedShop))
-                            ? _selectedShop
-                            : (shopOptions.isNotEmpty ? shopOptions.first : null),
-                        items: shopOptions
-                            .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-                            .toList(),
-                        onChanged: (v) => setState(() => _selectedShop = v),
-                        decoration: const InputDecoration(
-                          labelText: 'Shop',
-                          border: OutlineInputBorder(),
-                        ),
-                        validator: (v) => (v == null || v.isEmpty) ? 'Select a shop' : null,
-                      )
-                    else
-                      TextFormField(
-                        readOnly: true,
-                        initialValue: widget.shopName,
-                        decoration: const InputDecoration(
-                          labelText: 'Shop',
-                          border: OutlineInputBorder(),
-                        ),
-                      ),
-                    const SizedBox(height: 16),
-
-                    // Today / Yesterday
-                    Row(
-                      children: [
-                        Expanded(
-                          child: ChoiceChip(
-                            label: const Text('Today'),
-                            selected: _dayChoice == 'today',
-                            onSelected: (_) => setState(() => _dayChoice = 'today'),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: ChoiceChip(
-                            label: const Text('Yesterday'),
-                            selected: _dayChoice == 'yesterday',
-                            onSelected: (_) => setState(() => _dayChoice = 'yesterday'),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-
-                    _amountField(_cashC, 'Cash'),
-                    const SizedBox(height: 12),
-                    _amountField(_cardC, 'Card'),
-                    const SizedBox(height: 12),
-                    _amountField(_otherC, 'Other'),
-
-                    const SizedBox(height: 16),
-                    _totalBar(total),
-
-                    const SizedBox(height: 18),
-                    _loading
-                        ? const Center(child: CircularProgressIndicator())
-                        : ElevatedButton.icon(
-                            icon: Icon(isEditing ? Icons.save : Icons.add),
-                            label: Text(isEditing ? 'Update Sale' : 'Add Sale'),
-                            onPressed: () => isEditing ? _updateSale() : _submitSale(),
-                          ),
-                  ],
-                ),
+    return WillPopScope(
+      onWillPop: () async {
+        if (shouldShowBackToSelection) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const ShopSelectionScreen()),
+          );
+          return false;
+        }
+        return true;
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          leading: shouldShowBackToSelection ? const BackButton() : null,
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Add Sale'),
+              Text(
+                appBarTitleShop,
+                style: Theme.of(context).textTheme.bodySmall,
               ),
+            ],
+          ),
+          actions: [
+            if (hasMultipleAssigned)
+              IconButton(
+                tooltip: 'Switch shop',
+                icon: const Icon(Icons.swap_horiz),
+                onPressed: _goToShopSelection,
+              ),
+            IconButton(
+              tooltip: 'Logout',
+              icon: const Icon(Icons.logout),
+              onPressed: _confirmLogout,
+            ),
+          ],
+        ),
+        body: Padding(
+          padding: const EdgeInsets.all(16),
+          child: shopOptions.isEmpty && !isEditing
+              ? const Center(child: Text('No shop available to add a sale.'))
+              : Form(
+                  key: _formKey,
+                  child: ListView(
+                    children: [
+                      if (isEmployee) _shopInfoCard(),
+                      if (isEmployee) const SizedBox(height: 12),
+
+                      if (!isEmployee)
+                        DropdownButtonFormField<String>(
+                          value: (_selectedShop != null && shopOptions.contains(_selectedShop))
+                              ? _selectedShop
+                              : (shopOptions.isNotEmpty ? shopOptions.first : null),
+                          items: shopOptions
+                              .map((s) => DropdownMenuItem(value: s, child: Text(s)))
+                              .toList(),
+                          onChanged: (v) => setState(() => _selectedShop = v),
+                          decoration: const InputDecoration(
+                            labelText: 'Shop',
+                            border: OutlineInputBorder(),
+                          ),
+                          validator: (v) =>
+                              (v == null || v.isEmpty) ? 'Select a shop' : null,
+                        ),
+
+                      if (!isEmployee) const SizedBox(height: 16),
+
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ChoiceChip(
+                              label: const Text('Today'),
+                              selected: _dayChoice == 'today',
+                              onSelected: (_) => setState(() => _dayChoice = 'today'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: ChoiceChip(
+                              label: const Text('Yesterday'),
+                              selected: _dayChoice == 'yesterday',
+                              onSelected: (_) => setState(() => _dayChoice = 'yesterday'),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+
+                      _amountField(_cashC, 'Cash'),
+                      const SizedBox(height: 12),
+                      _amountField(_cardC, 'Card'),
+                      const SizedBox(height: 12),
+                      _amountField(_otherC, 'Other'),
+
+                      const SizedBox(height: 16),
+                      _totalBar(total),
+
+                      const SizedBox(height: 18),
+                      _loading
+                          ? const Center(child: CircularProgressIndicator())
+                          : ElevatedButton.icon(
+                              icon: Icon(isEditing ? Icons.save : Icons.add),
+                              label: Text(isEditing ? 'Update Sale' : 'Add Sale'),
+                              onPressed: () => isEditing ? _updateSale() : _submitSale(),
+                            ),
+                    ],
+                  ),
+                ),
+        ),
+      ),
+    );
+  }
+
+  // ---------- Widgets ----------
+
+  Widget _shopInfoCard() {
+    final shop = _selectedShop ?? '';
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: Theme.of(context).dividerColor.withOpacity(0.4)),
+      ),
+      child: ListTile(
+        leading: const CircleAvatar(child: Icon(Icons.store)),
+        title: const Text('Selected shop', style: TextStyle(fontWeight: FontWeight.w600)),
+        subtitle: Text(shop.isEmpty ? '—' : shop),
+        trailing: const Icon(Icons.check_circle, color: Colors.green),
       ),
     );
   }
@@ -211,13 +253,13 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
         prefixText: 'Rs. ',
       ),
       validator: (v) {
-        if (v == null || v.trim().isEmpty) return null; // optional fields
+        if (v == null || v.trim().isEmpty) return null; // optional
         final d = double.tryParse(v);
         if (d == null) return 'Invalid number';
         if (d < 0) return 'Must be ≥ 0';
         return null;
       },
-      onChanged: (_) => setState(() {}), // refresh total
+      onChanged: (_) => setState(() {}),
     );
   }
 
@@ -242,7 +284,47 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     );
   }
 
-  // --------------- Logic ----------------
+  // ---------- Navigation / Actions ----------
+
+  void _goToShopSelection() {
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => const ShopSelectionScreen()),
+    );
+  }
+
+  Future<void> _confirmLogout() async {
+    final ok = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Logout?'),
+            content:
+                const Text('You will be signed out and returned to the login screen.'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Logout'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!ok) return;
+
+    await context.read<AppDataProvider>().logout();
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (_) => false,
+    );
+  }
+
+  // ---------- Logic ----------
 
   DateTime _selectedDate() {
     final now = DateTime.now();
@@ -257,6 +339,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
   }
 
   double _parse(String s) => double.tryParse(s.trim()) ?? 0.0;
+
   String _numToText(dynamic n) {
     if (n == null) return '';
     final d = (n is num) ? n.toDouble() : double.tryParse('$n') ?? 0.0;
@@ -265,8 +348,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
 
   Future<void> _submitSale() async {
     if (!_formKey.currentState!.validate()) return;
-
-    if (_selectedShop == null || _selectedShop!.isEmpty) {
+    if ((_selectedShop ?? '').isEmpty) {
       _snack('Select a shop');
       return;
     }
@@ -285,7 +367,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
       final chosen = _selectedDate();
       final (from, to) = _dayBounds(chosen);
 
-      // ✅ One-sale-per-shop-per-day check
+      // one-sale-per-shop-per-day
       final dupQ = FirebaseFirestore.instance
           .collection('sales')
           .where('shop', isEqualTo: _selectedShop)
@@ -295,14 +377,11 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
 
       final dupSnap = await dupQ.get();
       if (dupSnap.docs.isNotEmpty) {
-        _snack(
-          'Sale already exists for ${_selectedShop!} on ${DateFormat('dd MMM, yyyy').format(from)}',
-        );
+        _snack('Sale already exists for ${_selectedShop!} on ${DateFormat('dd MMM, yyyy').format(from)}');
         setState(() => _loading = false);
         return;
       }
 
-      // Set createdAt at midday of chosen date (for consistent date filtering)
       final createdAt = DateTime(chosen.year, chosen.month, chosen.day, 12, 0);
 
       final data = {
@@ -315,17 +394,11 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
         'createdAt': Timestamp.fromDate(createdAt),
       };
 
-      // Direct write (so createdAt stays what we set)
       final doc = await FirebaseFirestore.instance.collection('sales').add(data);
 
-      // Refresh UI
       await app.fetchSales();
-
       _snack('Sale added (ID: ${doc.id})', ok: true);
       if (mounted) Navigator.pop(context);
-    } on FirebaseException catch (e) {
-      // If you get index error: create composite index on (shop ==, createdAt ASC)
-      _snack('Error: ${e.message}');
     } catch (e) {
       _snack('Error: $e');
     } finally {
@@ -352,7 +425,6 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
 
     setState(() => _loading = true);
     try {
-      // Keep original createdAt on edit
       final updates = {
         'shop': _selectedShop ?? sale['shop'],
         'cash': cash,
@@ -374,11 +446,14 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
   }
 
   void _snack(String msg, {bool ok = false}) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg),
-        backgroundColor: ok ? Colors.green : null,
-      ),
-    );
-  }
+  final theme = Theme.of(context);
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text(msg),
+      backgroundColor: ok ? Colors.green : theme.colorScheme.error, // 🔴 error = red
+      behavior: SnackBarBehavior.floating,
+      duration: const Duration(seconds: 3),
+    ),
+  );
+}
 }
