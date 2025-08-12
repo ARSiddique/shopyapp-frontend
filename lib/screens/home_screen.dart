@@ -267,9 +267,10 @@ class HomeDashboard extends StatelessWidget {
                     SummaryCard(
                       icon: Icons.shopping_bag,
                       title: 'Orders',
-                      value: isEmployee
-                          ? employeeOrders.length.toString()
-                          : appData.orders.length.toString(),
+                      // value: isEmployee
+                      //     ? employeeOrders.length.toString()
+                      //     : appData.orders.length.toString(),
+                      value: ' ',
                       color: Colors.deepPurple,
                       onTap: () {
                         Navigator.push(
@@ -287,9 +288,10 @@ class HomeDashboard extends StatelessWidget {
                     SummaryCard(
                       icon: Icons.trending_up,
                       title: 'Sales',
-                      value: isEmployee
-                          ? todayShopSales.length.toString()
-                          : appData.sales.length.toString(),
+                      // value: isEmployee
+                      //     ? todayShopSales.length.toString()
+                      //     : appData.sales.length.toString(),
+                      value: ' ',
                       color: Colors.teal,
                       onTap: () {
                         Navigator.push(
@@ -307,7 +309,8 @@ class HomeDashboard extends StatelessWidget {
                       SummaryCard(
                         icon: Icons.store,
                         title: 'Shops',
-                        value: appData.shops.length.toString(),
+                        // value: appData.shops.length.toString(),
+                        value: ' ',
                         color: Colors.orange,
                         onTap: () {
                           Navigator.push(
@@ -323,7 +326,8 @@ class HomeDashboard extends StatelessWidget {
                       SummaryCard(
                         icon: Icons.people,
                         title: 'Employees',
-                        value: appData.employees.length.toString(),
+                        // value: appData.employees.length.toString(),
+                        value: ' ',
                         color: Colors.blue,
                         onTap: () {
                           Navigator.push(

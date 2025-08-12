@@ -86,11 +86,13 @@ void initState() {
     super.dispose();
   }
 
-  Future<void> _submit() async {
+ Future<void> _submit() async {
   if (!_formKey.currentState!.validate()) return;
   setState(() => _isLoading = true);
 
   try {
+    final app = Provider.of<AppDataProvider>(context, listen: false);
+
     final name  = _nameController.text.trim();
     final phone = _phoneController.text.trim();
     final email = _emailController.text.trim();
@@ -101,96 +103,145 @@ void initState() {
       'name'          : name,
       'phone'         : phone,
       'email'         : email,
-      'role'          : role,          // lowercase
-      'assignedShops' : <String>[],    // edit screen par assignment nahi
+      'role'          : role.isEmpty ? 'employee' : role,
+      'assignedShops' : <String>[],
       'updatedAt'     : Timestamp.now(),
     };
 
+    // --------------------------
+    // EDIT MODE
+    // --------------------------
     if (_isEditMode) {
-      // ✅ EDIT MODE
       final String id =
           (widget.existingEmployee?['uid'] ?? _loggedInUser?['uid'] ?? '').toString();
       if (id.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Missing user ID for edit'),
-          backgroundColor: Colors.red,
-        ));
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Missing user ID for edit'),
+            backgroundColor: Colors.red,
+          ));
+        }
         return;
       }
 
       final empRef = FirebaseFirestore.instance.collection('employees').doc(id);
       final usrRef = FirebaseFirestore.instance.collection('users').doc(id);
 
-      // upsert employees/{id}
       final empSnap = await empRef.get();
       if (empSnap.exists) {
         await empRef.update(baseData);
       } else {
-        await empRef.set({
-          ...baseData,
-          'createdAt': Timestamp.now(),
-          'uid': id,
-        });
+        await empRef.set({...baseData, 'createdAt': Timestamp.now(), 'uid': id});
       }
 
-      // upsert users/{id}
       final usrSnap = await usrRef.get();
       if (usrSnap.exists) {
         await usrRef.update(baseData);
       } else {
-        await usrRef.set({
-          ...baseData,
-          'createdAt': Timestamp.now(),
-          'uid': id,
-        });
+        await usrRef.set({...baseData, 'createdAt': Timestamp.now(), 'uid': id});
       }
 
-      // 🔐 OPTIONAL: password/loginCode change agar user ne kuch enter kiya ho
+      // Optional: password/loginCode update
       if (pass.isNotEmpty) {
-        // Firestore me store (tumhare login-code flow ke liye)
         await empRef.update({'password': pass, 'loginCode': pass});
         await usrRef.update({'password': pass, 'loginCode': pass});
 
-        // FirebaseAuth rules:
-        // - Sirf current logged-in user apna password direct update kar sakta
-        // - Dusre user ka change -> reset email
         try {
           final current = FirebaseAuth.instance.currentUser;
           if (current != null && current.uid == id) {
             await current.updatePassword(pass);
           } else if (email.isNotEmpty) {
             await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
-            // (snackbar intentionally skip, agar show karna ho to yahan add karo)
           }
         } catch (e) {
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text('Auth password update failed: $e'),
-              backgroundColor: Colors.red,
-            ));
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Auth password update failed: $e'), backgroundColor: Colors.red),
+            );
           }
         }
       }
 
+      // Refresh local caches (optional)
+      await app.fetchEmployees();
+      await app.fetchUsers();
+
       if (!mounted) return;
-      // (confirmation snackbar off rakhna ho to comment rehne do)
-      // ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-      //   content: Text('Employee updated successfully'),
-      // ));
       Navigator.pop(context);
       return;
     }
 
-    // NOTE: create-mode yahan nahi include kiya, kyunki aap ne sirf edit block manga tha.
-  } catch (e) {
+    // --------------------------
+    // CREATE MODE
+    // --------------------------
+    // 1) Decide UID source:
+    //    - If email+pass provided -> create FirebaseAuth user and use auth.uid
+    //    - Else -> generate Firestore doc id and use that as uid (code-login only)
+    String newUid;
+
+    if (email.isNotEmpty && pass.isNotEmpty) {
+      try {
+        final cred = await FirebaseAuth.instance.createUserWithEmailAndPassword(
+          email: email,
+          password: pass,
+        );
+        if (cred.user == null) {
+          throw 'Auth user not created';
+        }
+        newUid = cred.user!.uid;
+      } on FirebaseAuthException catch (e) {
+        // Agar email duplicate ho ya weak password ho
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Auth create failed: ${e.message}'), backgroundColor: Colors.red),
+          );
+        }
+        return;
+      }
+    } else {
+      // No email/password path -> purely Firestore-based user
+      // loginCode/password field se code-login chalega
+      final tempDoc = FirebaseFirestore.instance.collection('users').doc();
+      newUid = tempDoc.id;
+    }
+
+    final empRef = FirebaseFirestore.instance.collection('employees').doc(newUid);
+    final usrRef = FirebaseFirestore.instance.collection('users').doc(newUid);
+
+    final createPayload = {
+      ...baseData,
+      'uid'       : newUid,
+      'createdAt' : Timestamp.now(),
+      if (pass.isNotEmpty) 'password': pass,
+      if (pass.isNotEmpty) 'loginCode': pass, // tumhare code-login flow ke liye
+    };
+
+    // 2) Write to Firestore (employees + users)
+    await Future.wait([
+      empRef.set(createPayload),
+      usrRef.set(createPayload),
+    ]);
+
+    // 3) Optional local refresh
+    await app.fetchEmployees();
+    await app.fetchUsers();
+
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+      const SnackBar(content: Text('Employee created successfully')),
     );
+    Navigator.pop(context);
+  } catch (e) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+      );
+    }
   } finally {
     if (mounted) setState(() => _isLoading = false);
   }
 }
+
 
   @override
   Widget build(BuildContext context) {

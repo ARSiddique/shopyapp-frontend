@@ -35,11 +35,13 @@ class _SplashScreenState extends State<SplashScreen> {
     try {
       final appData = context.read<AppDataProvider>();
 
-      // NOTE: main.dart me AppDataProvider()..restoreSession() call ho raha.
-      // yahan thoda sa wait + data warmup:
-      await Future.delayed(const Duration(milliseconds: 150));
-      await appData.fetchAllData();
-      appData.startFirebaseListeners();
+// 🔐 Ensure session is restored *now* (auth-first version in provider)
+await appData.restoreSession();
+
+// Warm up data after session is settled
+await appData.fetchAllData();
+appData.startFirebaseListeners();
+
 
       final user = appData.loggedInUser;
 

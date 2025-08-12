@@ -1,423 +1,813 @@
+// lib/screens/sales_screen.dart
 import 'dart:io';
-import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import 'package:intl/intl.dart';
-import 'package:csv/csv.dart';
-import 'package:pdf/widgets.dart' as pw;
-import 'package:pdf/widgets.dart' show TableHelper;
-import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_core/firebase_core.dart' show FirebaseException;
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:printing/printing.dart';
+import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
 
 import '../providers/app_data_provider.dart';
 import 'add_sale_screen.dart';
 
 class SalesScreen extends StatefulWidget {
   const SalesScreen({super.key});
+
   @override
   State<SalesScreen> createState() => _SalesScreenState();
 }
 
 class _SalesScreenState extends State<SalesScreen> {
-  String viewMode = 'Daily';
-  DateTime selectedDate = DateTime.now();
-  DateTime? fromDate;
-  DateTime? toDate;
-  String selectedShop = 'All';
+  // ---- Filters ----
+  // Daily | Weekly | Monthly | Yearly | Specific Date | Date Range
+  String _period = 'Daily';
+  String _selectedShop = 'All';
+  DateTime _anchorDate = DateTime.now(); // for non-range periods + specific date
+  DateTimeRange? _range;                 // for "Date Range"
 
-  // ---- date window helpers (inclusive start, exclusive end) ----
-  ({DateTime? from, DateTime? to}) _range() {
-    final d = DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
-    if (viewMode == 'Daily') {
-      return (from: d, to: d.add(const Duration(days: 1)));
-    } else if (viewMode == 'Weekly') {
-      final mon = d.subtract(Duration(days: d.weekday - 1));
-      return (from: mon, to: mon.add(const Duration(days: 7)));
-    } else if (viewMode == 'Monthly') {
-      final first = DateTime(d.year, d.month, 1);
-      final nextFirst = DateTime(d.year, d.month + 1, 1);
-      return (from: first, to: nextFirst);
-    } else if (viewMode == 'Yearly') {
-      final jan1 = DateTime(d.year, 1, 1);
-      final nextJan1 = DateTime(d.year + 1, 1, 1);
-      return (from: jan1, to: nextJan1);
-    } else if (viewMode == 'Custom' && fromDate != null && toDate != null) {
-      final start = DateTime(fromDate!.year, fromDate!.month, fromDate!.day);
-      final endExclusive = DateTime(toDate!.year, toDate!.month, toDate!.day)
-          .add(const Duration(days: 1));
-      return (from: start, to: endExclusive);
-    }
-    return (from: null, to: null);
-  }
+  // Daily/SpecificDate + today cutoff (no sale → red row)
+  final int _cutoffHour = 15; // 3 PM
 
-  // ---- back handling (AppBar + Android back) ----
-  Future<bool> _handleBack() async {
-    if (Navigator.of(context).canPop()) {
-      Navigator.of(context).pop();
-      return false;
-    }
-    return true;
-  }
-
-  DateTime _asDate(dynamic raw) {
-    if (raw is DateTime) return raw;
-    if (raw is String) return DateTime.tryParse(raw) ?? DateTime.now();
-    try {
-      final fn = raw?.toDate as DateTime Function();
-      return fn();
-    } catch (_) {
-      return DateTime.now();
-    }
-  }
-
-  bool _isLate(Map<String, dynamic> s) {
-    final now = DateTime.now();
-    final cutoff = DateTime(now.year, now.month, now.day, 21);
-    return _asDate(s['createdAt']).isAfter(cutoff);
-  }
-
-  Future<Directory?> _getDownloadDirectory() async {
-    if (Platform.isAndroid) {
-      if (await Permission.manageExternalStorage.request().isGranted ||
-          await Permission.storage.request().isGranted) {
-        final dir = Directory('/storage/emulated/0/Download');
-        return await dir.exists() ? dir : await getExternalStorageDirectory();
-      }
-      if (!mounted) return null;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Storage permission denied')),
-      );
-      return null;
-    }
-    return await getApplicationDocumentsDirectory();
-  }
-
-  Future<void> _exportData(String format, List<Map<String, dynamic>> sales) async {
-    final headers = ['Date', 'Time', 'Shop', 'Cash', 'Card', 'Other', 'Total', 'Submitted By'];
-    String numStr(v) => (v is num) ? v.toStringAsFixed(0) : (v?.toString() ?? '0');
-
-    final rows = sales.map((s) {
-      final dt = _asDate(s['createdAt']);
-      return [
-        DateFormat('yyyy-MM-dd').format(dt),
-        DateFormat('hh:mm a').format(dt),
-        (s['shop'] ?? '').toString(),
-        numStr(s['cash']),
-        numStr(s['card']),
-        numStr(s['other']),
-        numStr(s['total']),
-        (s['employee'] ?? '').toString(),
-      ];
-    }).toList();
-
-    final dir = await _getDownloadDirectory();
-    if (dir == null) return;
-    final filePath = '${dir.path}/sales_export.${format == 'csv' ? 'csv' : 'pdf'}';
-
-    if (format == 'csv') {
-      final csv = const ListToCsvConverter().convert([headers, ...rows]);
-      await File(filePath).writeAsString(csv);
-    } else {
-      final pdf = pw.Document();
-      pdf.addPage(pw.Page(build: (_) => TableHelper.fromTextArray(headers: headers, data: rows)));
-      await File(filePath).writeAsBytes(await pdf.save());
-    }
-
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('${format.toUpperCase()} exported to: $filePath')),
-    );
-  }
+  // Export cache
+  List<_ShopRow> _lastRows = [];
+  DateTime? _lastFrom;
+  DateTime? _lastTo;
 
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppDataProvider>();
-    final role = (app.loggedInUser?['role'] ?? 'employee').toString().toLowerCase();
 
-    // employees don’t stay here
-    if (role == 'employee') {
-      Future.microtask(() {
-        if (!mounted) return;
-        Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const AddSaleScreen()));
-      });
-      return const SizedBox.shrink();
+    // Active shops
+    final shops = app.shops
+        .where((s) => (s['isDeleted'] ?? false) != true)
+        .map((s) => (s['name'] ?? '').toString())
+        .where((s) => s.isNotEmpty)
+        .toList()
+      ..sort();
+
+    // Dropdown options
+    final allShopOptions = ['All', ...shops];
+
+    // If selected shop vanished, fallback to All
+    if (_selectedShop != 'All' && !shops.contains(_selectedShop)) {
+      _selectedShop = 'All';
     }
 
-    final shops = app.shops.where((s) => s['isDeleted'] != true).toList();
-    final range = _range();
+    // Visible list for table (so only selected shop appears)
+    final visibleShops = (_selectedShop != 'All' && shops.contains(_selectedShop))
+        ? <String>[_selectedShop]
+        : shops;
 
-    // --- SERVER-SIDE STREAM (fast) ---
-    final salesStream = app
-        .buildSalesQuery(
-          from: range.from,
-          to: range.to,
-          shop: selectedShop != 'All' ? selectedShop : null,
-        )
-        .snapshots();
+    final (from, to) = _computeRange();
+    final periodLabel = _labelForRange(from, to);
 
-    return PopScope(
-      canPop: true,
-      onPopInvokedWithResult: (didPop, _) async {
-        if (!didPop) await _handleBack();
-      },
-      child: Scaffold(
-        appBar: AppBar(
-          automaticallyImplyLeading: Navigator.of(context).canPop(),
-          leading: Navigator.of(context).canPop()
-              ? BackButton(onPressed: _handleBack)
-              : null,
-          title: const Text('Sales Overview'),
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.add_shopping_cart_outlined),
-              tooltip: 'Add Sale',
-              onPressed: () {
-                final prefillShop = selectedShop != 'All' ? selectedShop : null;
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => AddSaleScreen(shopName: prefillShop)),
-                );
-              },
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Sales'),
+        leading: const BackButton(),
+        actions: [
+          IconButton(
+            tooltip: 'Export PDF',
+            onPressed: _exportPdf,
+            icon: const Icon(Icons.picture_as_pdf_outlined),
+          ),
+          IconButton(
+            tooltip: 'Export CSV',
+            onPressed: _exportCsv,
+            icon: const Icon(Icons.table_chart_outlined),
+          ),
+          IconButton(
+            tooltip: 'Add Sale',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const AddSaleScreen()),
+              );
+            },
+            icon: const Icon(Icons.add),
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          const SizedBox(height: 8),
+          _filtersRow(allShopOptions, periodLabel),
+          const SizedBox(height: 8),
+          Expanded(
+            child: _tableStream(
+              from: from,
+              to: to,
+              selectedShop: _selectedShop,
+              allShops: visibleShops, // <= only selected shop if filtered
             ),
-          ],
-        ),
+          ),
+        ],
+      ),
+    );
+  }
 
-        floatingActionButton: FloatingActionButton.extended(
-          icon: const Icon(Icons.add),
-          label: const Text('Add Sale'),
-          onPressed: () {
-            final prefillShop = selectedShop != 'All' ? selectedShop : null;
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => AddSaleScreen(shopName: prefillShop)),
-            );
-          },
-        ),
+  // --------------------- FILTERS ROW ---------------------
 
-        body: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _filtersRow(List<String> shopOptions, String periodLabel) {
+    final theme = Theme.of(context);
+    final isRange = _period == 'Date Range';
+    final isSpecific = _period == 'Specific Date';
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
           children: [
-            // ---- Filters ----
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Wrap(
-                spacing: 12,
-                runSpacing: 8,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  DropdownButton<String>(
-                    value: viewMode,
-                    items: const [
-                      DropdownMenuItem(value: 'Daily', child: Text('Daily')),
-                      DropdownMenuItem(value: 'Weekly', child: Text('Weekly')),
-                      DropdownMenuItem(value: 'Monthly', child: Text('Monthly')),
-                      DropdownMenuItem(value: 'Yearly', child: Text('Yearly')),
-                      DropdownMenuItem(value: 'Custom', child: Text('Custom')),
-                    ],
-                    onChanged: (v) => setState(() => viewMode = v ?? 'Daily'),
-                  ),
-                  ElevatedButton(
-                    onPressed: () async {
-                      final picked = await showDatePicker(
-                        context: context,
-                        initialDate: selectedDate,
-                        firstDate: DateTime.now().subtract(const Duration(days: 365)),
-                        lastDate: DateTime.now(),
-                      );
-                      if (picked != null) setState(() => selectedDate = picked);
-                    },
-                    child: const Text('Pick Date'),
-                  ),
-                  ElevatedButton(
-                    onPressed: () async {
-                      final from = await showDatePicker(
-                        context: context,
-                        initialDate: fromDate ?? DateTime.now(),
-                        firstDate: DateTime.now().subtract(const Duration(days: 365)),
-                        lastDate: DateTime.now(),
-                      );
-                      if (from == null) return;
-                      final to = await showDatePicker(
-                        context: context,
-                        initialDate: toDate ?? DateTime.now(),
-                        firstDate: from,
-                        lastDate: DateTime.now(),
-                      );
-                      if (to == null) return;
-                      setState(() {
-                        fromDate = from;
-                        toDate = to;
-                        viewMode = 'Custom';
-                      });
-                    },
-                    child: const Text('Select Range'),
-                  ),
-                  DropdownButton<String>(
-                    value: selectedShop,
-                    items: [
-                      const DropdownMenuItem(value: 'All', child: Text('All Shops')),
-                      ...shops.map((s) => DropdownMenuItem(
-                            value: s['name'].toString(),
-                            child: Text(s['name'].toString()),
-                          )),
-                    ],
-                    onChanged: (v) => setState(() => selectedShop = v ?? 'All'),
-                  ),
-                ],
+            // Shop
+            SizedBox(
+              width: 170,
+              child: DropdownButtonFormField<String>(
+                isDense: true,
+                value: shopOptions.contains(_selectedShop) ? _selectedShop : 'All',
+                items: shopOptions
+                    .map((s) => DropdownMenuItem(value: s, child: Text(s)))
+                    .toList(),
+                onChanged: (v) => setState(() => _selectedShop = v ?? 'All'),
+                decoration: const InputDecoration(
+                  labelText: 'Shop',
+                  isDense: true,
+                  border: UnderlineInputBorder(),
+                ),
               ),
             ),
+            const SizedBox(width: 12),
 
-            // ---- Live table ----
-            Expanded(
-              child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                stream: salesStream,
-                builder: (context, snap) {
-                  if (snap.connectionState == ConnectionState.waiting) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-                  if (snap.hasError) {
-                    return Center(child: Text('Error: ${snap.error}'));
-                  }
-                  final docs = snap.data?.docs ?? const [];
-                  final sales = docs
-                      .map((d) => context.read<AppDataProvider>().mapSaleDoc(d))
-                      .toList();
+            // Period
+            SizedBox(
+              width: 180,
+              child: DropdownButtonFormField<String>(
+                isDense: true,
+                value: _period,
+                items: const [
+                  DropdownMenuItem(value: 'Daily', child: Text('Daily')),
+                  DropdownMenuItem(value: 'Weekly', child: Text('Weekly')),
+                  DropdownMenuItem(value: 'Monthly', child: Text('Monthly')),
+                  DropdownMenuItem(value: 'Yearly', child: Text('Yearly')),
+                  DropdownMenuItem(value: 'Specific Date', child: Text('Specific Date')),
+                  DropdownMenuItem(value: 'Date Range', child: Text('Date Range')),
+                ],
+                onChanged: (v) {
+                  if (v == null) return;
+                  setState(() {
+                    _period = v;
+                    if (_period != 'Date Range') _range = null;
+                  });
 
-                  if (sales.isEmpty) {
-                    return const Center(child: Text('No sales for selected filter'));
-                  }
+                  // Auto-open the relevant picker after dropdown closes
+                  Future.microtask(() async {
+                    if (!mounted) return;
+                    if (_period == 'Specific Date') {
+                      await _pickAnchorDate();
+                    } else if (_period == 'Date Range') {
+                      await _pickRange();
+                    }
+                  });
+                },
+                decoration: const InputDecoration(
+                  labelText: 'Period',
+                  isDense: true,
+                  border: UnderlineInputBorder(),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
 
-                  return Column(
-                    children: [
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: Padding(
-                          padding: const EdgeInsets.only(right: 12, bottom: 8),
-                          child: Wrap(
-                            spacing: 8,
-                            children: [
-                              IconButton(
-                                icon: const Icon(Icons.picture_as_pdf),
-                                tooltip: 'Export PDF',
-                                onPressed: () => _exportData('pdf', sales),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.table_chart),
-                                tooltip: 'Export CSV',
-                                onPressed: () => _exportData('csv', sales),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      Expanded(
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: PaginatedDataTable(
-                            header: const Text('Sales Data'),
-                            columns: const [
-                              DataColumn(label: Text('Date')),
-                              DataColumn(label: Text('Total')),
-                              DataColumn(label: Text('Cash')),
-                              DataColumn(label: Text('Card')),
-                              DataColumn(label: Text('Other')),
-                              DataColumn(label: Text('Shop')),
-                              DataColumn(label: Text('Employee')),
-                              DataColumn(label: Text('Actions')),
-                            ],
-                            source: _SalesDataSource(
-                              sales,
-                              (sale) => Navigator.push(
-                                context,
-                                MaterialPageRoute(builder: (_) => AddSaleScreen(existingSale: sale)),
-                              ),
-                              (id) async {
-                                final confirm = await showDialog<bool>(
-                                  context: context,
-                                  builder: (_) => AlertDialog(
-                                    title: const Text('Delete Sale?'),
-                                    content: const Text('Are you sure you want to delete this sale?'),
-                                    actions: [
-                                      TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-                                      TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
-                                    ],
-                                  ),
-                                );
-                                if (confirm == true) {
-                                  await context.read<AppDataProvider>().deleteSale(id);
-                                }
-                              },
-                              _isLate,
-                            ),
-                            rowsPerPage: sales.length < 10 ? sales.length : 10,
-                          ),
+            // Explicit pickers (buttons) still available
+            if (isRange)
+              _rangePickerButton(theme)
+            else
+              _datePickerButton(theme, periodLabel, isSpecific),
+
+            const SizedBox(width: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _datePickerButton(ThemeData theme, String periodLabel, bool isSpecific) {
+    final btnLabel = isSpecific ? 'Pick date' : 'Anchor date';
+    final sub = periodLabel;
+
+    return OutlinedButton.icon(
+      icon: const Icon(Icons.event),
+      label: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(btnLabel),
+          const SizedBox(width: 6),
+          Text(
+            sub,
+            style: TextStyle(
+              fontSize: 12,
+              color: theme.textTheme.bodySmall?.color?.withOpacity(0.8),
+            ),
+          ),
+        ],
+      ),
+      onPressed: _pickAnchorDate,
+      style: OutlinedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      ),
+    );
+  }
+
+  Widget _rangePickerButton(ThemeData theme) {
+    final label = (_range == null)
+        ? 'Pick range'
+        : '${DateFormat('dd MMM, yyyy').format(_range!.start)}  –  ${DateFormat('dd MMM, yyyy').format(_range!.end)}';
+
+    return OutlinedButton.icon(
+      icon: const Icon(Icons.date_range),
+      label: Text(label),
+      onPressed: _pickRange,
+      style: OutlinedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      ),
+    );
+  }
+
+  Future<void> _pickAnchorDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _anchorDate,
+      firstDate: DateTime(2022, 1, 1),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+    );
+    if (picked != null) setState(() => _anchorDate = picked);
+  }
+
+  Future<void> _pickRange() async {
+    final picked = await showDateRangePicker(
+      context: context,
+      initialDateRange: _range ??
+          DateTimeRange(
+            start: DateTime.now().subtract(const Duration(days: 6)),
+            end: DateTime.now(),
+          ),
+      firstDate: DateTime(2022, 1, 1),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+    );
+    if (picked != null) setState(() => _range = picked);
+  }
+
+  // --------------------- DATA TABLE (stream + fallback) ---------------------
+
+  Widget _tableStream({
+    required DateTime from,
+    required DateTime to,
+    required String selectedShop,
+    required List<String> allShops,
+  }) {
+    final app = context.read<AppDataProvider>();
+    final bool filterByShop = selectedShop != 'All';
+
+    final q = app.buildSalesQuery(
+      from: from,
+      to: to,
+      shop: filterByShop ? selectedShop : null,
+    );
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: q.snapshots(),
+      builder: (ctx, snap) {
+        if (snap.hasError) {
+          final err = snap.error;
+          if (err is FirebaseException && err.code == 'failed-precondition') {
+            // fallback: loose + local filter
+            final loose = app.buildSalesQueryLoose(
+              shop: filterByShop ? selectedShop : null,
+            );
+            return FutureBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              future: loose.get(),
+              builder: (ctx, fs) {
+                if (fs.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (fs.hasError) return Center(child: Text('Error: ${fs.error}'));
+                final docs = fs.data?.docs ?? const [];
+                final rows = _aggregate(
+                  docs.map((d) => app.mapSaleDoc(d)).where((m) {
+                    final dt = m['createdAt'] as DateTime;
+                    return !dt.isBefore(from) && dt.isBefore(to);
+                  }).toList(),
+                  allShops,
+                );
+                return _buildTable(rows, from, to);
+              },
+            );
+          }
+          return Center(child: Text('Error: $err'));
+        }
+
+        if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+
+        final docs = snap.data!.docs;
+        final rows = _aggregate(
+          docs.map((d) => app.mapSaleDoc(d)).toList(),
+          allShops,
+        );
+        return _buildTable(rows, from, to);
+      },
+    );
+  }
+
+  // Make sure all shops appear (even with blanks) + aggregate totals
+  List<_ShopRow> _aggregate(List<Map<String, dynamic>> sales, List<String> allShops) {
+    final map = <String, _ShopRow>{};
+
+    // pre-seed so every shop shows even with no sale
+    for (final s in allShops) {
+      map[s] = _ShopRow(shop: s);
+    }
+
+    for (final m in sales) {
+      final shop = (m['shop'] ?? '').toString();
+      final cash = (m['cash'] as num?)?.toDouble() ?? 0.0;
+      final card = (m['card'] as num?)?.toDouble() ?? 0.0;
+      final other = (m['other'] as num?)?.toDouble() ?? 0.0;
+      final total = (m['total'] as num?)?.toDouble() ?? (cash + card + other);
+      final emp = (m['employee'] ?? m['addedBy'] ?? '').toString();
+      final dt = (m['createdAt'] as DateTime?) ?? DateTime.now();
+
+      final row = map[shop] ?? _ShopRow(shop: shop);
+      row.cash += cash;
+      row.card += card;
+      row.other += other;
+      row.total += total;
+      if (row.lastSaleAt == null || dt.isAfter(row.lastSaleAt!)) {
+        row.lastSaleAt = dt;
+        row.employee = emp; // last seller
+      }
+      map[shop] = row;
+    }
+
+    final rows = map.values.toList()
+      ..sort((a, b) {
+        final ad = a.lastSaleAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final bd = b.lastSaleAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return bd.compareTo(ad);
+      });
+    return rows;
+  }
+
+  Widget _buildTable(List<_ShopRow> rows, DateTime from, DateTime to) {
+    // cache for export
+    _lastRows = rows;
+    _lastFrom = from;
+    _lastTo = to;
+
+    final now = DateTime.now();
+    final isDailyOrSpecific = _period == 'Daily' || _period == 'Specific Date';
+    final isToday = isDailyOrSpecific &&
+        from.year == now.year &&
+        from.month == now.month &&
+        from.day == now.day;
+    final afterCutoff = now.hour >= _cutoffHour;
+
+    final periodText = _labelForRange(from, to);
+    final headerStyle = TextStyle(
+      fontWeight: FontWeight.w700,
+      color: Theme.of(context).colorScheme.onSurface,
+    );
+
+    return Scrollbar(
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 920),
+          child: SingleChildScrollView(
+            child: DataTableTheme(
+              data: DataTableThemeData(headingTextStyle: headerStyle),
+              child: DataTable(
+                headingRowHeight: 40,
+                columns: const [
+                  DataColumn(label: Text('Shop')),
+                  DataColumn(label: Text('Period')),
+                  DataColumn(label: Text('Total')),
+                  DataColumn(label: Text('Employee')),
+                  DataColumn(label: Text('Cash')),
+                  DataColumn(label: Text('Card')),
+                  DataColumn(label: Text('Other')),
+                  DataColumn(label: Text('Actions')),
+                ],
+                rows: rows.map((r) {
+                  // has any sale?
+                  final hasSale = (r.total > 0) || (r.cash > 0) || (r.card > 0) || (r.other > 0);
+
+                  // blanks when no sale yet
+                  String moneyOrBlank(num v) => hasSale ? _fmtMoney(v) : '';
+                  final employeeText =
+                      hasSale && (r.employee?.isNotEmpty ?? false) ? r.employee! : '';
+
+                  final danger = isToday && afterCutoff && !hasSale;
+                  final textStyle = danger
+                      ? TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.w600)
+                      : const TextStyle();
+
+                  return DataRow(
+                    color: danger
+                        ? MaterialStatePropertyAll(Colors.red.withOpacity(0.08))
+                        : null,
+                    cells: [
+                      DataCell(Text(r.shop, style: textStyle)),
+                      DataCell(Text(periodText, style: textStyle)),
+                      DataCell(Text(moneyOrBlank(r.total), style: textStyle)),
+                      DataCell(Text(employeeText, style: textStyle)),
+                      DataCell(Text(moneyOrBlank(r.cash), style: textStyle)),
+                      DataCell(Text(moneyOrBlank(r.card), style: textStyle)),
+                      DataCell(Text(moneyOrBlank(r.other), style: textStyle)),
+
+                      // Actions: View / Edit latest / Delete latest
+                      DataCell(
+                        PopupMenuButton<String>(
+                          onSelected: (v) {
+                            if (v == 'view') _openShopSalesDetail(r.shop, from, to);
+                            if (v == 'edit_latest') _editLatestSaleForShop(r.shop, from, to);
+                            if (v == 'delete_latest') _deleteLatestSaleForShop(r.shop, from, to);
+                          },
+                          itemBuilder: (ctx) => const [
+                            PopupMenuItem(value: 'view', child: Text('View sales')),
+                            PopupMenuItem(value: 'edit_latest', child: Text('Edit latest')),
+                            PopupMenuItem(value: 'delete_latest', child: Text('Delete latest')),
+                          ],
+                          child: const Icon(Icons.more_horiz),
                         ),
                       ),
                     ],
                   );
-                },
+                }).toList(),
               ),
             ),
-          ],
+          ),
         ),
       ),
     );
   }
-}
 
-class _SalesDataSource extends DataTableSource {
-  final List<Map<String, dynamic>> sales;
-  final void Function(Map<String, dynamic>) onEdit;
-  final void Function(String) onDelete;
-  final bool Function(Map<String, dynamic>) isLate;
+  // --------------------- PER-SHOP DETAIL (VIEW / EDIT / DELETE) ---------------------
 
-  _SalesDataSource(this.sales, this.onEdit, this.onDelete, this.isLate);
+  Future<void> _openShopSalesDetail(String shop, DateTime from, DateTime to) async {
+    final app = context.read<AppDataProvider>();
+    final primary = app.buildSalesQuery(from: from, to: to, shop: shop);
 
-  DateTime _asDate(dynamic raw) {
-    if (raw is DateTime) return raw;
-    if (raw is String) return DateTime.tryParse(raw) ?? DateTime.now();
-    try {
-      final fn = raw?.toDate as DateTime Function();
-      return fn();
-    } catch (_) {
-      return DateTime.now();
-    }
-  }
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) {
+        final height = MediaQuery.of(ctx).size.height * 0.85;
+        return SizedBox(
+          height: height,
+          child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: primary.snapshots(),
+            builder: (ctx, snap) {
+              if (snap.hasError) {
+                final err = snap.error;
+                if (err is FirebaseException && err.code == 'failed-precondition') {
+                  return FutureBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                    future: app.buildSalesQueryLoose(shop: shop).get(),
+                    builder: (ctx, fs) {
+                      if (fs.connectionState == ConnectionState.waiting) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+                      if (fs.hasError) {
+                        return Center(child: Text('Error: ${fs.error}'));
+                      }
+                      final rows = (fs.data?.docs ?? const [])
+                          .map((d) => app.mapSaleDoc(d))
+                          .where((m) {
+                            final dt = m['createdAt'] as DateTime;
+                            return !dt.isBefore(from) && dt.isBefore(to);
+                          })
+                          .toList()
+                        ..sort((a, b) => (b['createdAt'] as DateTime)
+                            .compareTo(a['createdAt'] as DateTime));
+                      return _buildSaleListForShop(shop, rows);
+                    },
+                  );
+                }
+                return Center(child: Text('Error: $err'));
+              }
 
-  String numStr(v) => (v is num) ? v.toStringAsFixed(0) : (v?.toString() ?? '0');
+              if (!snap.hasData) {
+                return const Center(child: CircularProgressIndicator());
+              }
 
-  @override
-  DataRow? getRow(int index) {
-    if (index >= sales.length) return null;
-    final s = sales[index];
-    final dt = _asDate(s['createdAt']);
+              final rows = snap.data!.docs
+                  .map((d) => app.mapSaleDoc(d))
+                  .toList()
+                ..sort((a, b) => (b['createdAt'] as DateTime)
+                    .compareTo(a['createdAt'] as DateTime));
 
-    return DataRow(
-      color: MaterialStateProperty.resolveWith<Color?>(
-        (states) => isLate(s) ? const Color.fromARGB(25, 255, 0, 0) : null,
-      ),
-      cells: [
-        DataCell(Text(DateFormat('MMM dd, yyyy').format(dt))),
-        DataCell(Text(numStr(s['total']))),
-        DataCell(Text(numStr(s['cash']))),
-        DataCell(Text(numStr(s['card']))),
-        DataCell(Text(numStr(s['other']))),
-        DataCell(Text((s['shop'] ?? '').toString())),
-        DataCell(Text((s['employee'] ?? '').toString())),
-        DataCell(Row(
-          children: [
-            IconButton(icon: const Icon(Icons.edit, size: 18, color: Colors.blue),  onPressed: () => onEdit(s)),
-            IconButton(icon: const Icon(Icons.delete, size: 18, color: Colors.red), onPressed: () => onDelete(s['id'].toString())),
-          ],
-        )),
-      ],
+              return _buildSaleListForShop(shop, rows);
+            },
+          ),
+        );
+      },
     );
   }
 
-  @override
-  bool get isRowCountApproximate => false;
-  @override
-  int get rowCount => sales.length;
-  @override
-  int get selectedRowCount => 0;
+  Widget _buildSaleListForShop(String shop, List<Map<String, dynamic>> rows) {
+    return Scaffold(
+      appBar: AppBar(title: Text('Sales • $shop')),
+      body: rows.isEmpty
+          ? const Center(child: Text('No sales found for this period'))
+          : ListView.separated(
+              padding: const EdgeInsets.all(12),
+              itemCount: rows.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 8),
+              itemBuilder: (_, i) {
+                final s = rows[i];
+                final when =
+                    DateFormat('dd MMM, yyyy – hh:mm a').format(s['createdAt']);
+                final total = (s['total'] as double).toStringAsFixed(0);
+                final emp = (s['employee'] ?? '').toString();
+
+                return Card(
+                  child: ListTile(
+                    title: Text('Rs. $total',
+                        style: const TextStyle(fontWeight: FontWeight.w600)),
+                    subtitle: Text('By: $emp  •  $when'),
+                    onTap: () => _editSale(s),
+                    trailing: PopupMenuButton<String>(
+                      onSelected: (v) {
+                        if (v == 'edit') _editSale(s);
+                        if (v == 'delete') _confirmDelete(s['id'].toString());
+                      },
+                      itemBuilder: (ctx) => const [
+                        PopupMenuItem(value: 'edit', child: Text('Edit')),
+                        PopupMenuItem(value: 'delete', child: Text('Delete')),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+    );
+  }
+
+  Future<Map<String, dynamic>?> _fetchLatestSaleForShop(
+    String shop, DateTime from, DateTime to,
+  ) async {
+    final app = context.read<AppDataProvider>();
+    try {
+      final snap = await app
+          .buildSalesQuery(from: from, to: to, shop: shop)
+          .limit(1)
+          .get();
+      if (snap.docs.isEmpty) return null;
+      return app.mapSaleDoc(snap.docs.first);
+    } on FirebaseException catch (e) {
+      if (e.code == 'failed-precondition') {
+        final fs = await app.buildSalesQueryLoose(shop: shop).get();
+        final items = fs.docs
+            .map((d) => app.mapSaleDoc(d))
+            .where((m) {
+              final dt = m['createdAt'] as DateTime;
+              return !dt.isBefore(from) && dt.isBefore(to);
+            })
+            .toList()
+          ..sort((a, b) =>
+              (b['createdAt'] as DateTime).compareTo(a['createdAt'] as DateTime));
+        return items.isEmpty ? null : items.first;
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> _editLatestSaleForShop(String shop, DateTime from, DateTime to) async {
+    final s = await _fetchLatestSaleForShop(shop, from, to);
+    if (s == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No sale to edit for this period')),
+      );
+      return;
+    }
+    if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => AddSaleScreen(existingSale: s)),
+    );
+  }
+
+  Future<void> _deleteLatestSaleForShop(String shop, DateTime from, DateTime to) async {
+    final s = await _fetchLatestSaleForShop(shop, from, to);
+    if (s == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No sale to delete for this period')),
+      );
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete latest sale?'),
+        content: Text('Shop: $shop\nAmount: Rs. ${(s['total'] as double).toStringAsFixed(0)}'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (ok == true && mounted) {
+      await context.read<AppDataProvider>().deleteSale(s['id'].toString());
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Sale deleted')),
+      );
+    }
+  }
+
+  Future<void> _editSale(Map<String, dynamic> sale) async {
+    if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => AddSaleScreen(existingSale: sale)),
+    );
+  }
+
+  Future<void> _confirmDelete(String id) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete sale?'),
+        content: const Text('This cannot be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (ok == true && mounted) {
+      await context.read<AppDataProvider>().deleteSale(id);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Sale deleted')),
+      );
+    }
+  }
+
+  // --------------------- HELPERS ---------------------
+
+  // Returns (from, to) [to exclusive]
+  (DateTime, DateTime) _computeRange() {
+    if (_period == 'Date Range' && _range != null) {
+      final start = DateTime(_range!.start.year, _range!.start.month, _range!.start.day);
+      final end = DateTime(_range!.end.year, _range!.end.month, _range!.end.day)
+          .add(const Duration(days: 1));
+      return (start, end);
+    }
+
+    if (_period == 'Weekly') {
+      final start = _anchorDate.subtract(Duration(days: _anchorDate.weekday - 1));
+      final s = DateTime(start.year, start.month, start.day);
+      return (s, s.add(const Duration(days: 7)));
+    }
+
+    if (_period == 'Monthly') {
+      final s = DateTime(_anchorDate.year, _anchorDate.month, 1);
+      final e = DateTime(_anchorDate.year, _anchorDate.month + 1, 1);
+      return (s, e);
+    }
+
+    if (_period == 'Yearly') {
+      final s = DateTime(_anchorDate.year, 1, 1);
+      final e = DateTime(_anchorDate.year + 1, 1, 1);
+      return (s, e);
+    }
+
+    // Daily + Specific Date
+    final s = DateTime(_anchorDate.year, _anchorDate.month, _anchorDate.day);
+    return (s, s.add(const Duration(days: 1)));
+  }
+
+  String _labelForRange(DateTime from, DateTime to) {
+    final end = to.subtract(const Duration(days: 1));
+    if (_period == 'Daily' || _period == 'Specific Date') {
+      return DateFormat('dd MMM, yyyy').format(from);
+    }
+    if (_period == 'Weekly' || _period == 'Date Range') {
+      return '${DateFormat('dd MMM, yyyy').format(from)} – ${DateFormat('dd MMM, yyyy').format(end)}';
+    }
+    if (_period == 'Monthly') return DateFormat('MMM yyyy').format(from);
+    if (_period == 'Yearly') return DateFormat('yyyy').format(from);
+    return '${DateFormat('dd MMM').format(from)} – ${DateFormat('dd MMM').format(end)}';
+  }
+
+  String _fmtMoney(dynamic v) {
+    final d = v is num ? v.toDouble() : double.tryParse('${v ?? ''}') ?? 0.0;
+    return 'Rs. ${d.toStringAsFixed(0)}';
+  }
+
+  // --------------------- EXPORTS ---------------------
+
+  Future<void> _exportCsv() async {
+    if (_lastRows.isEmpty || _lastFrom == null || _lastTo == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nothing to export')),
+      );
+      return;
+    }
+
+    final b = StringBuffer();
+    b.writeln('Shop,Period,Total,Employee,Cash,Card,Other');
+
+    final periodText = _labelForRange(_lastFrom!, _lastTo!);
+    for (final r in _lastRows) {
+      b.writeln([
+        _csvEsc(r.shop),
+        _csvEsc(periodText),
+        r.total.toStringAsFixed(0),
+        _csvEsc(r.employee ?? ''),
+        r.cash.toStringAsFixed(0),
+        r.card.toStringAsFixed(0),
+        r.other.toStringAsFixed(0),
+      ].join(','));
+    }
+
+    final dir = await getTemporaryDirectory();
+    final name =
+        'sales_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.csv';
+    final file = File('${dir.path}/$name');
+    await file.writeAsString(b.toString(), flush: true);
+
+    await Share.shareXFiles([XFile(file.path)], text: 'Sales CSV');
+  }
+
+  String _csvEsc(String s) {
+    final needs = s.contains(',') || s.contains('\n') || s.contains('"');
+    if (!needs) return s;
+    return '"${s.replaceAll('"', '""')}"';
+  }
+
+  Future<void> _exportPdf() async {
+    if (_lastRows.isEmpty || _lastFrom == null || _lastTo == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nothing to export')),
+      );
+      return;
+    }
+
+    final pdf = pw.Document();
+    final periodText = _labelForRange(_lastFrom!, _lastTo!);
+
+    pdf.addPage(
+      pw.MultiPage(
+        build: (ctx) => [
+          pw.Text('Sales Report',
+              style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
+          pw.SizedBox(height: 4),
+          pw.Text('Period: $periodText'),
+          pw.SizedBox(height: 12),
+          pw.Table.fromTextArray(
+            headers: const ['Shop', 'Period', 'Total', 'Employee', 'Cash', 'Card', 'Other'],
+            data: _lastRows.map((r) {
+              return [
+                r.shop,
+                periodText,
+                r.total.toStringAsFixed(0),
+                r.employee ?? '',
+                r.cash.toStringAsFixed(0),
+                r.card.toStringAsFixed(0),
+                r.other.toStringAsFixed(0),
+              ];
+            }).toList(),
+            headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+            cellAlignment: pw.Alignment.centerLeft,
+            headerDecoration: pw.BoxDecoration(color: PdfColors.grey300),
+            cellStyle: pw.TextStyle(fontSize: 10),
+          ),
+        ],
+      ),
+    );
+
+    final bytes = await pdf.save();
+    final name =
+        'sales_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.pdf';
+    await Printing.sharePdf(bytes: bytes, filename: name);
+  }
+}
+
+// Row model for aggregation
+class _ShopRow {
+  _ShopRow({required this.shop});
+
+  final String shop;
+  double cash = 0.0;
+  double card = 0.0;
+  double other = 0.0;
+  double total = 0.0;
+  String? employee;
+  DateTime? lastSaleAt;
 }
