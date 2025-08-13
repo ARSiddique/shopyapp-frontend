@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:provider/provider.dart';
-import 'package:flutter/gestures.dart'; // <- add this
+import 'package:flutter/gestures.dart';
 import 'providers/app_data_provider.dart';
 import 'providers/theme_provider.dart';
 import 'theme/app_theme.dart';
