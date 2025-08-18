@@ -18,13 +18,15 @@ class _ShopSelectionScreenState extends State<ShopSelectionScreen> {
   @override
   void initState() {
     super.initState();
-    // warm up data if needed
-    Future.microtask(() async {
+    // ✅ Avoid using BuildContext across async gaps
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
       final app = context.read<AppDataProvider>();
       setState(() => _loading = true);
       if (app.shops.isEmpty) {
         await app.fetchShops();
       }
+      if (!mounted) return;
       setState(() => _loading = false);
     });
   }
@@ -118,13 +120,15 @@ class _ShopSelectionScreenState extends State<ShopSelectionScreen> {
   }
 
   Future<void> _selectShop(String id, String name) async {
+    // ✅ pre-capture
     final app = context.read<AppDataProvider>();
+    final navigator = Navigator.of(context);
+
     // save selection (if other parts use it)
     app.setSelectedShop(id, name);
+
     // open Add Sale locked to this shop (admin can still change there)
-    if (!mounted) return;
-    await Navigator.push(
-      context,
+    await navigator.push(
       MaterialPageRoute(
         builder: (_) => AddSaleScreen(shopName: name),
       ),
@@ -132,6 +136,10 @@ class _ShopSelectionScreenState extends State<ShopSelectionScreen> {
   }
 
   Future<void> _confirmLogout() async {
+    // ✅ pre-capture
+    final navigator = Navigator.of(context);
+    final app = context.read<AppDataProvider>();
+
     final ok = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
@@ -154,9 +162,9 @@ class _ShopSelectionScreenState extends State<ShopSelectionScreen> {
 
     if (!ok) return;
 
-    await context.read<AppDataProvider>().logout();
+    await app.logout();
     if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
+    navigator.pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginScreen()),
       (_) => false,
     );
@@ -178,7 +186,9 @@ class _ShopTile extends StatelessWidget {
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: Theme.of(context).dividerColor.withOpacity(0.4)),
+        side: BorderSide(
+          color: Theme.of(context).dividerColor.withValues(alpha: 0.4), // ✅
+        ),
       ),
       child: ListTile(
         leading: const CircleAvatar(child: Icon(Icons.store)),

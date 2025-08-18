@@ -32,13 +32,15 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _handleLogin() async {
+    // ✅ Pre-capture to avoid using BuildContext after awaits
+    final navigator = Navigator.of(context);
+    final appData = context.read<AppDataProvider>();
+
     FocusScope.of(context).unfocus();
     setState(() {
       _isLoading = true;
       _error = null;
     });
-
-    final appData = context.read<AppDataProvider>();
 
     final success = await appData.loginWithEmailAndPassword(
       _emailController.text.trim(),
@@ -62,6 +64,7 @@ class _LoginScreenState extends State<LoginScreen> {
     // thora sa wait taa-ke listeners apply ho jayen
     await Future.delayed(const Duration(milliseconds: 200));
 
+    // Data read — no context usage here
     final user = appData.loggedInUser;
     final role = (user?['role'] ?? '').toString().toLowerCase();
     final assignedShops =
@@ -70,28 +73,24 @@ class _LoginScreenState extends State<LoginScreen> {
     log('ROLE: $role');
     log('Assigned Shops: $assignedShops');
 
+    if (!mounted) return;
     setState(() => _isLoading = false);
 
+    // ✅ Use pre-captured navigator (no context)
     if (role == 'employee') {
       if (assignedShops.length == 1) {
-        // 1 shop → directly Add Sale
-        Navigator.pushReplacement(
-          context,
+        navigator.pushReplacement(
           MaterialPageRoute(
             builder: (_) => AddSaleScreen(shopName: assignedShops.first),
           ),
         );
       } else {
-        // 0 ya >1 → Shop Selection (0 ho to wahan "Shop Not Assigned" dikhega)
-        Navigator.pushReplacement(
-          context,
+        navigator.pushReplacement(
           MaterialPageRoute(builder: (_) => const ShopSelectionScreen()),
         );
       }
     } else {
-      // admin / manager
-      Navigator.pushReplacement(
-        context,
+      navigator.pushReplacement(
         MaterialPageRoute(builder: (_) => const HomeScreen()),
       );
     }

@@ -34,45 +34,49 @@ class _AddEmployeeAndAccessScreenState
   Map<String, dynamic>? _loggedInUser;
   bool _isAssigningToSelf = false;
 
-  @override
+@override
 void initState() {
   super.initState();
-  Future.microtask(() {
-    final app = Provider.of<AppDataProvider>(context, listen: false);
+
+  // Run after the first frame so context/route safely available
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (!mounted) return;
+
+    // Safer than Provider.of(..., listen:false) inside an async gap
+    final app = context.read<AppDataProvider>();
     _loggedInUser = app.loggedInUser;
 
-    final routeArgs = ModalRoute.of(context)?.settings.arguments;
-    _isAssigningToSelf = routeArgs == 'assignMyself';
+    // Route arguments safely after first frame
+    final args = ModalRoute.of(context)?.settings.arguments;
+    _isAssigningToSelf = args == 'assignMyself';
 
+    // ----- EDIT MODE -----
     if (widget.existingEmployee != null) {
-      // ✅ EDIT: existing employee se prefill
       final emp = widget.existingEmployee!;
-      _isEditMode = true;
-      _nameController.text  = (emp['name']  ?? '').toString();
-      _phoneController.text = (emp['phone'] ?? '').toString();
-      _emailController.text = (emp['email'] ?? '').toString();
-      _selectedRole         = (emp['role']  ?? 'employee').toString().toLowerCase();
-
-      // ⬇️ password/loginCode prefill (toggleable field me show hoga)
-      final pwd = (emp['password'] ?? emp['loginCode'] ?? '').toString();
-      _passwordController.text = pwd;
-
-      setState(() {});
+      setState(() {
+        _isEditMode = true;
+        _nameController.text  = (emp['name']  ?? '').toString();
+        _phoneController.text = (emp['phone'] ?? '').toString();
+        _emailController.text = (emp['email'] ?? '').toString();
+        _selectedRole         = (emp['role']  ?? 'employee').toString().toLowerCase();
+        _passwordController.text =
+            (emp['password'] ?? emp['loginCode'] ?? '').toString();
+      });
       return;
     }
 
+    // ----- SELF-ASSIGN MODE (update self) -----
     if (_isAssigningToSelf && _loggedInUser != null) {
-      // ✅ EDIT: self-assign route se prefill
-      _isEditMode = true;
-      _nameController.text  = (_loggedInUser!['name']  ?? '').toString();
-      _phoneController.text = (_loggedInUser!['phone'] ?? '').toString();
-      _emailController.text = (_loggedInUser!['email'] ?? '').toString();
-      _selectedRole         = (_loggedInUser!['role']  ?? 'employee').toString().toLowerCase();
-
-      final pwd = (_loggedInUser!['password'] ?? _loggedInUser!['loginCode'] ?? '').toString();
-      _passwordController.text = pwd;
-
-      setState(() {});
+      setState(() {
+        _isEditMode = true;
+        _nameController.text  = (_loggedInUser!['name']  ?? '').toString();
+        _phoneController.text = (_loggedInUser!['phone'] ?? '').toString();
+        _emailController.text = (_loggedInUser!['email'] ?? '').toString();
+        _selectedRole         =
+            (_loggedInUser!['role'] ?? 'employee').toString().toLowerCase();
+        _passwordController.text =
+            (_loggedInUser!['password'] ?? _loggedInUser!['loginCode'] ?? '').toString();
+      });
     }
   });
 }

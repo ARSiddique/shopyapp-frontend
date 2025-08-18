@@ -17,11 +17,18 @@ class _EmployeesOverviewScreenState extends State<EmployeesOverviewScreen> {
   @override
   void initState() {
     super.initState();
-    Future.microtask(() async {
-      final app = Provider.of<AppDataProvider>(context, listen: false);
+    // Avoid using BuildContext across async gaps
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final app = context.read<AppDataProvider>();
       setState(() => _loading = true);
-      if (app.employees.isEmpty) await app.fetchEmployees(); // ✅ load employees only
-      if (app.shops.isEmpty) await app.fetchShops();
+      if (app.employees.isEmpty) {
+        await app.fetchEmployees(); // ✅ load employees only
+      }
+      if (app.shops.isEmpty) {
+        await app.fetchShops();
+      }
+      if (!mounted) return;
       setState(() => _loading = false);
     });
   }
@@ -65,8 +72,10 @@ class _EmployeesOverviewScreenState extends State<EmployeesOverviewScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text('Assign shops to $name',
-                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+                    Text(
+                      'Assign shops to $name',
+                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+                    ),
                     const SizedBox(height: 8),
                     if (allShops.isEmpty)
                       const Padding(
@@ -85,8 +94,11 @@ class _EmployeesOverviewScreenState extends State<EmployeesOverviewScreen> {
                               value: checked,
                               onChanged: (v) {
                                 setSheetState(() {
-                                  if (v == true) selected.add(shop);
-                                  else selected.remove(shop);
+                                  if (v == true) {
+                                    selected.add(shop);
+                                  } else {
+                                    selected.remove(shop);
+                                  }
                                 });
                               },
                               title: Text(shop),
@@ -108,7 +120,9 @@ class _EmployeesOverviewScreenState extends State<EmployeesOverviewScreen> {
                                 userName: name,
                                 newAssignedShops: selected.toList(),
                               );
-                              if (context.mounted) Navigator.pop(ctx); // auto-close
+                              if (context.mounted) {
+                                Navigator.pop(ctx); // auto-close
+                              }
                             },
                             child: const Text('Save'),
                           ),
@@ -167,10 +181,10 @@ class _EmployeesOverviewScreenState extends State<EmployeesOverviewScreen> {
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
                             color: role == 'admin'
-                                ? Colors.indigo.withOpacity(0.12)
+                                ? Colors.indigo.withValues(alpha: 0.12)
                                 : role == 'manager'
-                                    ? Colors.orange.withOpacity(0.12)
-                                    : Colors.green.withOpacity(0.12),
+                                    ? Colors.orange.withValues(alpha: 0.12)
+                                    : Colors.green.withValues(alpha: 0.12),
                             borderRadius: BorderRadius.circular(999),
                           ),
                           child: Text(
@@ -192,7 +206,9 @@ class _EmployeesOverviewScreenState extends State<EmployeesOverviewScreen> {
                       elevation: 0,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
-                        side: BorderSide(color: Theme.of(context).dividerColor.withOpacity(0.4)),
+                        side: BorderSide(
+                          color: Theme.of(context).dividerColor.withValues(alpha: 0.4),
+                        ),
                       ),
                       child: Column(
                         children: [
@@ -396,7 +412,9 @@ class _EmployeesOverviewScreenState extends State<EmployeesOverviewScreen> {
                         final uid = (items[i]['uid'] ?? '').toString();
                         final name = (items[i]['name'] ?? '').toString();
                         final role = (items[i]['role'] ?? '').toString();
-                        if (uid.isNotEmpty) _confirmDelete(uid, name, role);
+                        if (uid.isNotEmpty) {
+                          _confirmDelete(uid, name, role);
+                        }
                       },
                       shopPreviewBuilder: _shopPreviewChips,
                     ),
@@ -423,7 +441,9 @@ class _EmployeesOverviewScreenState extends State<EmployeesOverviewScreen> {
                       final uid = (items[i]['uid'] ?? '').toString();
                       final name = (items[i]['name'] ?? '').toString();
                       final role = (items[i]['role'] ?? '').toString();
-                      if (uid.isNotEmpty) _confirmDelete(uid, name, role);
+                      if (uid.isNotEmpty) {
+                        _confirmDelete(uid, name, role);
+                      }
                     },
                     shopPreviewBuilder: _shopPreviewChips,
                   ),
@@ -469,7 +489,9 @@ class _EmpCard extends StatelessWidget {
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: Theme.of(context).dividerColor.withOpacity(0.4)),
+        side: BorderSide(
+          color: Theme.of(context).dividerColor.withValues(alpha: 0.4),
+        ),
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
@@ -501,10 +523,10 @@ class _EmpCard extends StatelessWidget {
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
                             color: isAdmin
-                                ? Colors.indigo.withOpacity(0.12)
+                                ? Colors.indigo.withValues(alpha: 0.12)
                                 : role == 'manager'
-                                    ? Colors.orange.withOpacity(0.12)
-                                    : Colors.green.withOpacity(0.12),
+                                    ? Colors.orange.withValues(alpha: 0.12)
+                                    : Colors.green.withValues(alpha: 0.12),
                             borderRadius: BorderRadius.circular(999),
                           ),
                           child: Text(
@@ -527,17 +549,18 @@ class _EmpCard extends StatelessWidget {
                               } else if (value == 'delete') {
                                 onDelete();
                               } else if (value == 'assign') {
-                                if (uid.isNotEmpty) onAssign(uid, name);
+                                if (uid.isNotEmpty) {
+                                  onAssign(uid, name);
+                                }
                               } else if (value == 'view') {
                                 onTap();
                               }
                             },
-                            itemBuilder: (ctx) => [
-                              const PopupMenuItem(value: 'view', child: Text('View info')),
-                              const PopupMenuItem(value: 'edit', child: Text('Edit')),
-                              const PopupMenuItem(value: 'assign', child: Text('Assign shops')),
-                              if (!isAdmin)
-                                const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                            itemBuilder: (ctx) => const [
+                              PopupMenuItem(value: 'view', child: Text('View info')),
+                              PopupMenuItem(value: 'edit', child: Text('Edit')),
+                              PopupMenuItem(value: 'assign', child: Text('Assign shops')),
+                              PopupMenuItem(value: 'delete', child: Text('Delete')),
                             ],
                           ),
                       ],

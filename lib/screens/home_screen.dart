@@ -15,7 +15,7 @@ import '../screens/login_screen.dart';
 import '../screens/all_shops_screen.dart';
 import '../screens/shop_detail_screen.dart';
 import '../screens/employees_overview_screen.dart';
-import 'package:intl/intl.dart';
+// import 'package:intl/intl.dart';
 
 void showPlatformLogoutDialog(BuildContext context) {
   final appData = Provider.of<AppDataProvider>(context, listen: false);
@@ -208,15 +208,15 @@ class HomeDashboard extends StatelessWidget {
         .where((order) => order['employee'] == employeeName)
         .toList();
     // ✅ Add this block here:
-    final todayDate = DateFormat('yyyy-MM-dd').format(DateTime.now());
-    final assignedShops = (user['assignedShops'] ?? [])
-        .map<String>((s) => s.toString())
-        .toList();
-    final todayShopSales = appData.sales.where((sale) {
-      final saleDate = sale['saleDate'];
-      final shopName = sale['shop'];
-      return saleDate == todayDate && assignedShops.contains(shopName);
-    }).toList();
+    // final todayDate = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    // final assignedShops = (user['assignedShops'] ?? [])
+    //     .map<String>((s) => s.toString())
+    //     .toList();
+    // final todayShopSales = appData.sales.where((sale) {
+    //   final saleDate = sale['saleDate'];
+    //   final shopName = sale['shop'];
+    //   return saleDate == todayDate && assignedShops.contains(shopName);
+    // }).toList();
 
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance.collection('shops').snapshots(),

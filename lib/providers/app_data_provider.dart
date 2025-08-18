@@ -671,14 +671,23 @@ Future<void> addSaleUniquePerShopPerDay(Map<String, dynamic> saleData) async {
     }
   }
 
-  bool canEditOrder(Map<String, dynamic> order) {
-    final raw = order['createdAt'];
-    DateTime? createdAt;
-    if (raw is DateTime) createdAt = raw;
-    else if (raw is Timestamp) createdAt = raw.toDate();
-    if (createdAt == null) return false;
-    return DateTime.now().difference(createdAt).inMinutes <= 10;
+bool canEditOrder(Map<String, dynamic> order) {
+  final raw = order['createdAt'];
+  DateTime? createdAt;
+
+  if (raw is DateTime) {
+    createdAt = raw;
+  } else if (raw is Timestamp) {
+    createdAt = raw.toDate();
   }
+
+  if (createdAt == null) {
+    return false;
+  }
+
+  return DateTime.now().difference(createdAt).inMinutes <= 10;
+}
+
 
   List<Map<String, dynamic>> getEmployeeOrders(String employeeName) {
     return _orders.where((order) => order['createdBy'] == employeeName).toList();
@@ -1114,20 +1123,26 @@ Future<void> addSaleUniquePerShopPerDay(Map<String, dynamic> saleData) async {
       notifyListeners();
     });
 
-    firestore.collection('sales').snapshots().listen((snapshot) {
-      _sales
-        ..clear()
-        ..addAll(snapshot.docs.map((d) {
-          final data = d.data();
-          final raw = data['createdAt'];
-          DateTime? createdAt;
-          if (raw is Timestamp) createdAt = raw.toDate();
-          else if (raw is DateTime) createdAt = raw;
-          else if (raw is String) createdAt = DateTime.tryParse(raw);
-          return {'id': d.id, ...data, 'createdAt': createdAt};
-        }));
-      notifyListeners();
-    });
+  firestore.collection('sales').snapshots().listen((snapshot) {
+  _sales
+    ..clear()
+    ..addAll(snapshot.docs.map((d) {
+      final data = d.data();
+      final raw = data['createdAt'];
+      DateTime? createdAt;
+
+      if (raw is Timestamp) {
+        createdAt = raw.toDate();
+      } else if (raw is DateTime) {
+        createdAt = raw;
+      } else if (raw is String) {
+        createdAt = DateTime.tryParse(raw);
+      }
+
+      return {'id': d.id, ...data, 'createdAt': createdAt};
+    }));
+  notifyListeners();
+});
 
     firestore.collection('editRequests').snapshots().listen((snapshot) {
       _editRequests

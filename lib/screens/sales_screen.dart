@@ -1,7 +1,6 @@
 // lib/screens/sales_screen.dart
 import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_core/firebase_core.dart' show FirebaseException;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
@@ -23,11 +22,10 @@ class SalesScreen extends StatefulWidget {
 
 class _SalesScreenState extends State<SalesScreen> {
   // ---- Filters ----
-  // Daily | Weekly | Monthly | Yearly | Specific Date | Date Range
-  String _period = 'Daily';
+  String _period = 'Daily'; // Daily | Weekly | Monthly | Yearly | Specific Date | Date Range
   String _selectedShop = 'All';
   DateTime _anchorDate = DateTime.now(); // for non-range periods + specific date
-  DateTimeRange? _range;                 // for "Date Range"
+  DateTimeRange? _range; // for "Date Range"
 
   // Daily/SpecificDate + today cutoff (no sale → red row)
   final int _cutoffHour = 15; // 3 PM
@@ -83,8 +81,8 @@ class _SalesScreenState extends State<SalesScreen> {
           IconButton(
             tooltip: 'Add Sale',
             onPressed: () {
-              Navigator.push(
-                context,
+              final navigator = Navigator.of(context);
+              navigator.push(
                 MaterialPageRoute(builder: (_) => const AddSaleScreen()),
               );
             },
@@ -210,7 +208,7 @@ class _SalesScreenState extends State<SalesScreen> {
             sub,
             style: TextStyle(
               fontSize: 12,
-              color: theme.textTheme.bodySmall?.color?.withOpacity(0.8),
+              color: theme.textTheme.bodySmall?.color?.withValues(alpha: 0.8), // ✅
             ),
           ),
         ],
@@ -403,7 +401,8 @@ class _SalesScreenState extends State<SalesScreen> {
                 ],
                 rows: rows.map((r) {
                   // has any sale?
-                  final hasSale = (r.total > 0) || (r.cash > 0) || (r.card > 0) || (r.other > 0);
+                  final hasSale =
+                      (r.total > 0) || (r.cash > 0) || (r.card > 0) || (r.other > 0);
 
                   // blanks when no sale yet
                   String moneyOrBlank(num v) => hasSale ? _fmtMoney(v) : '';
@@ -417,7 +416,9 @@ class _SalesScreenState extends State<SalesScreen> {
 
                   return DataRow(
                     color: danger
-                        ? MaterialStatePropertyAll(Colors.red.withOpacity(0.08))
+                        ? WidgetStatePropertyAll( // ✅
+                            Colors.red.withValues(alpha: 0.08),
+                          )
                         : null,
                     cells: [
                       DataCell(Text(r.shop, style: textStyle)),
@@ -586,59 +587,66 @@ class _SalesScreenState extends State<SalesScreen> {
     }
   }
 
-  Future<void> _editLatestSaleForShop(String shop, DateTime from, DateTime to) async {
-    final s = await _fetchLatestSaleForShop(shop, from, to);
-    if (s == null) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No sale to edit for this period')),
-      );
-      return;
-    }
-    if (!mounted) return;
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => AddSaleScreen(existingSale: s)),
+Future<void> _editLatestSaleForShop(String shop, DateTime from, DateTime to) async {
+  final navigator = Navigator.of(context); // pre-capture
+  final messenger = ScaffoldMessenger.of(context); // pre-capture
+
+  final s = await _fetchLatestSaleForShop(shop, from, to);
+  if (s == null) {
+    messenger.showSnackBar(
+      const SnackBar(content: Text('No sale to edit for this period')),
     );
+    return;
+  }
+  if (!mounted) return; // ✅ guard after async gap
+  await navigator.push(
+    MaterialPageRoute(builder: (_) => AddSaleScreen(existingSale: s)),
+  );
+}
+
+Future<void> _deleteLatestSaleForShop(String shop, DateTime from, DateTime to) async {
+  final app = context.read<AppDataProvider>();           // pre-capture
+  final messenger = ScaffoldMessenger.of(context);       // pre-capture
+
+  final s = await _fetchLatestSaleForShop(shop, from, to);
+  if (s == null) {
+    messenger.showSnackBar(
+      const SnackBar(content: Text('No sale to delete for this period')),
+    );
+    return;
   }
 
-  Future<void> _deleteLatestSaleForShop(String shop, DateTime from, DateTime to) async {
-    final s = await _fetchLatestSaleForShop(shop, from, to);
-    if (s == null) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No sale to delete for this period')),
-      );
-      return;
-    }
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Delete latest sale?'),
-        content: Text('Shop: $shop\nAmount: Rs. ${(s['total'] as double).toStringAsFixed(0)}'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
-        ],
-      ),
-    );
-    if (ok == true && mounted) {
-      await context.read<AppDataProvider>().deleteSale(s['id'].toString());
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Sale deleted')),
-      );
-    }
+  if (!mounted) return; // ✅ guard before using context in showDialog
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Delete latest sale?'),
+      content: Text('Shop: $shop\nAmount: Rs. ${(s['total'] as double).toStringAsFixed(0)}'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
+      ],
+    ),
+  );
+
+  if (ok == true) {
+    await app.deleteSale(s['id'].toString());
+    // messenger safe to use (doesn't depend on mounted), but fine as-is:
+    messenger.showSnackBar(const SnackBar(content: Text('Sale deleted')));
   }
+}
 
   Future<void> _editSale(Map<String, dynamic> sale) async {
-    if (!mounted) return;
-    await Navigator.push(
-      context,
+    final navigator = Navigator.of(context); // ✅ pre-capture
+    await navigator.push(
       MaterialPageRoute(builder: (_) => AddSaleScreen(existingSale: sale)),
     );
   }
 
   Future<void> _confirmDelete(String id) async {
+    final app = context.read<AppDataProvider>(); // ✅ pre-capture
+    final messenger = ScaffoldMessenger.of(context); // ✅ pre-capture
+
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -650,9 +658,9 @@ class _SalesScreenState extends State<SalesScreen> {
         ],
       ),
     );
-    if (ok == true && mounted) {
-      await context.read<AppDataProvider>().deleteSale(id);
-      ScaffoldMessenger.of(context).showSnackBar(
+    if (ok == true) {
+      await app.deleteSale(id);
+      messenger.showSnackBar(
         const SnackBar(content: Text('Sale deleted')),
       );
     }
@@ -713,8 +721,9 @@ class _SalesScreenState extends State<SalesScreen> {
   // --------------------- EXPORTS ---------------------
 
   Future<void> _exportCsv() async {
+    final messenger = ScaffoldMessenger.of(context); // ✅ pre-capture
     if (_lastRows.isEmpty || _lastFrom == null || _lastTo == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         const SnackBar(content: Text('Nothing to export')),
       );
       return;
@@ -752,8 +761,9 @@ class _SalesScreenState extends State<SalesScreen> {
   }
 
   Future<void> _exportPdf() async {
+    final messenger = ScaffoldMessenger.of(context); // ✅ pre-capture
     if (_lastRows.isEmpty || _lastFrom == null || _lastTo == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         const SnackBar(content: Text('Nothing to export')),
       );
       return;
@@ -770,7 +780,7 @@ class _SalesScreenState extends State<SalesScreen> {
           pw.SizedBox(height: 4),
           pw.Text('Period: $periodText'),
           pw.SizedBox(height: 12),
-          pw.Table.fromTextArray(
+          pw.TableHelper.fromTextArray( // ✅
             headers: const ['Shop', 'Period', 'Total', 'Employee', 'Cash', 'Card', 'Other'],
             data: _lastRows.map((r) {
               return [

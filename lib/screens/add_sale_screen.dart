@@ -10,7 +10,7 @@ import 'login_screen.dart';
 
 class AddSaleScreen extends StatefulWidget {
   final Map<String, dynamic>? existingSale; // edit flow
-  final String? shopName;                   // for employee flow (locked from selection)
+  final String? shopName; // for employee flow (locked from selection)
 
   const AddSaleScreen({super.key, this.existingSale, this.shopName});
 
@@ -54,8 +54,11 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     final today = DateTime.now();
     final base = DateTime(today.year, today.month, today.day);
     final d = DateTime(dt.year, dt.month, dt.day);
-    if (d == base) _dayChoice = 'today';
-    else if (d == base.subtract(const Duration(days: 1))) _dayChoice = 'yesterday';
+    if (d == base) {
+      _dayChoice = 'today';
+    } else if (d == base.subtract(const Duration(days: 1))) {
+      _dayChoice = 'yesterday';
+    }
   }
 
   @override
@@ -88,11 +91,10 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
         .toSet();
 
     // Shop options per role
-    final shopOptions = isEmployee
-        ? allShops.where((s) => assigned.contains(s)).toList()
-        : allShops;
+    final shopOptions =
+        isEmployee ? allShops.where((s) => assigned.contains(s)).toList() : allShops;
 
-    // Decide selected shop (priority: existingSale -> widget.shopName -> assigned(only) -> first)
+    // Decide selected shop (priority: existingSale -> widget.shopName -> first available)
     _selectedShop ??= (widget.existingSale?['shop']?.toString().isNotEmpty == true)
         ? widget.existingSale!['shop'].toString()
         : (widget.shopName?.isNotEmpty == true
@@ -101,22 +103,29 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
 
     // Employee navigation/locking logic
     final hasMultipleAssigned = isEmployee && shopOptions.length > 1;
-    final shouldShowBackToSelection = isEmployee && hasMultipleAssigned;
+    final shouldShowBackToSelection = hasMultipleAssigned;
     final appBarTitleShop = _selectedShop ?? '—';
 
     final isEditing = widget.existingSale != null;
     final total = _parse(_cashC.text) + _parse(_cardC.text) + _parse(_otherC.text);
 
-    return WillPopScope(
-      onWillPop: () async {
-        if (shouldShowBackToSelection) {
+    // ---------- PopScope (predictive back compatible) ----------
+    final blockBackForSingleShopEmployee = isEmployee && !hasMultipleAssigned;
+    final interceptBackToSelection = shouldShowBackToSelection;
+    final canPop = !(blockBackForSingleShopEmployee || interceptBackToSelection);
+
+    return PopScope(
+      canPop: canPop,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return; // default pop already happened
+        // Multi-shop employee: instead of popping, go to shop selection
+        if (interceptBackToSelection) {
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(builder: (_) => const ShopSelectionScreen()),
           );
-          return false;
         }
-        return true;
+        // Single-shop employee: do nothing (block back)
       },
       child: Scaffold(
         appBar: AppBar(
@@ -124,7 +133,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
           title: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Add Sale'),
+              Text(isEditing ? 'Edit Sale' : 'Add Sale'),
               Text(
                 appBarTitleShop,
                 style: Theme.of(context).textTheme.bodySmall,
@@ -158,7 +167,8 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
 
                       if (!isEmployee)
                         DropdownButtonFormField<String>(
-                          value: (_selectedShop != null && shopOptions.contains(_selectedShop))
+                          value: (_selectedShop != null &&
+                                  shopOptions.contains(_selectedShop))
                               ? _selectedShop
                               : (shopOptions.isNotEmpty ? shopOptions.first : null),
                           items: shopOptions
@@ -189,7 +199,8 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
                             child: ChoiceChip(
                               label: const Text('Yesterday'),
                               selected: _dayChoice == 'yesterday',
-                              onSelected: (_) => setState(() => _dayChoice = 'yesterday'),
+                              onSelected: (_) =>
+                                  setState(() => _dayChoice = 'yesterday'),
                             ),
                           ),
                         ],
@@ -211,7 +222,8 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
                           : ElevatedButton.icon(
                               icon: Icon(isEditing ? Icons.save : Icons.add),
                               label: Text(isEditing ? 'Update Sale' : 'Add Sale'),
-                              onPressed: () => isEditing ? _updateSale() : _submitSale(),
+                              onPressed:
+                                  () => isEditing ? _updateSale() : _submitSale(),
                             ),
                     ],
                   ),
@@ -229,11 +241,14 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: Theme.of(context).dividerColor.withOpacity(0.4)),
+        side: BorderSide(
+          color: Theme.of(context).dividerColor.withValues(alpha: 0.4),
+        ),
       ),
       child: ListTile(
         leading: const CircleAvatar(child: Icon(Icons.store)),
-        title: const Text('Selected shop', style: TextStyle(fontWeight: FontWeight.w600)),
+        title:
+            const Text('Selected shop', style: TextStyle(fontWeight: FontWeight.w600)),
         subtitle: Text(shop.isEmpty ? '—' : shop),
         trailing: const Icon(Icons.check_circle, color: Colors.green),
       ),
@@ -267,7 +282,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
       decoration: BoxDecoration(
-        color: Colors.grey.withOpacity(0.07),
+        color: Colors.grey.withValues(alpha: 0.07),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.black12),
       ),
@@ -294,6 +309,10 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
   }
 
   Future<void> _confirmLogout() async {
+    // ✅ pre-capture to avoid using BuildContext after awaits
+    final app = context.read<AppDataProvider>();
+    final navigator = Navigator.of(context);
+
     final ok = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
@@ -316,9 +335,9 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
 
     if (!ok) return;
 
-    await context.read<AppDataProvider>().logout();
+    await app.logout();
     if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
+    navigator.pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginScreen()),
       (_) => false,
     );
@@ -347,15 +366,24 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
   }
 
   Future<void> _submitSale() async {
+    // pre-capture (avoid context after await)
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    final theme = Theme.of(context);
+
     if (!_formKey.currentState!.validate()) return;
     if ((_selectedShop ?? '').isEmpty) {
-      _snack('Select a shop');
+      _showSnack(messenger, theme, 'Select a shop');
       return;
     }
 
     final app = context.read<AppDataProvider>();
     final me = app.loggedInUser ?? {};
     final name = (me['name'] ?? '').toString();
+    final role = (me['role'] ?? '').toString().toLowerCase();
+    final isEmployee = role == 'employee';
+    final assignedShops =
+        (me['assignedShops'] as List? ?? []).map((e) => e.toString()).toList();
 
     final cash = _parse(_cashC.text);
     final card = _parse(_cardC.text);
@@ -377,11 +405,17 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
 
       final dupSnap = await dupQ.get();
       if (dupSnap.docs.isNotEmpty) {
-        _snack('Sale already exists for ${_selectedShop!} on ${DateFormat('dd MMM, yyyy').format(from)}');
+        if (!mounted) return;
+        _showSnack(
+          messenger,
+          theme,
+          'Sale already exists for ${_selectedShop!} on ${DateFormat('dd MMM, yyyy').format(from)}',
+        );
         setState(() => _loading = false);
         return;
       }
 
+      // store createdAt at a fixed noon time for that day
       final createdAt = DateTime(chosen.year, chosen.month, chosen.day, 12, 0);
 
       final data = {
@@ -397,26 +431,53 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
       final doc = await FirebaseFirestore.instance.collection('sales').add(data);
 
       await app.fetchSales();
-      _snack('Sale added (ID: ${doc.id})', ok: true);
-      if (mounted) Navigator.pop(context);
+      if (!mounted) return;
+      _showSnack(messenger, theme, 'Sale added (ID: ${doc.id})', ok: true);
+
+      // ----- role-aware navigation after submit -----
+      if (isEmployee) {
+        if (assignedShops.length > 1) {
+          // Multi-shop → back to selection
+          navigator.pushReplacement(
+            MaterialPageRoute(builder: (_) => const ShopSelectionScreen()),
+          );
+        } else {
+          // Single-shop → stay on this screen, reset form
+          _cashC.clear();
+          _cardC.clear();
+          _otherC.clear();
+          setState(() => _dayChoice = 'today');
+        }
+      } else {
+        // Admin/Manager → return to previous screen
+        navigator.pop();
+      }
     } catch (e) {
-      _snack('Error: $e');
+      if (!mounted) return;
+      _showSnack(messenger, theme, 'Error: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
   Future<void> _updateSale() async {
+    // pre-capture (avoid context after await)
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    final theme = Theme.of(context);
+
     if (!_formKey.currentState!.validate()) return;
 
     final sale = widget.existingSale ?? {};
     final saleId = (sale['id'] ?? '').toString();
     if (saleId.isEmpty) {
-      _snack('Missing sale ID');
+      _showSnack(messenger, theme, 'Missing sale ID');
       return;
     }
 
     final app = context.read<AppDataProvider>();
+    final me = app.loggedInUser ?? {};
+    final role = (me['role'] ?? '').toString().toLowerCase();
 
     final cash = _parse(_cashC.text);
     final card = _parse(_cardC.text);
@@ -436,24 +497,38 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
       await FirebaseFirestore.instance.collection('sales').doc(saleId).update(updates);
 
       await app.fetchSales();
-      _snack('Sale updated', ok: true);
-      if (mounted) Navigator.pop(context);
+      if (!mounted) return;
+      _showSnack(messenger, theme, 'Sale updated', ok: true);
+
+      // Employees generally cannot edit; but if they do, keep consistent:
+      if (role == 'employee') {
+        navigator.pushReplacement(
+          MaterialPageRoute(builder: (_) => const ShopSelectionScreen()),
+        );
+      } else {
+        navigator.pop();
+      }
     } catch (e) {
-      _snack('Error: $e');
+      if (!mounted) return;
+      _showSnack(messenger, theme, 'Error: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
-  void _snack(String msg, {bool ok = false}) {
-  final theme = Theme.of(context);
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(
-      content: Text(msg),
-      backgroundColor: ok ? Colors.green : theme.colorScheme.error, // 🔴 error = red
-      behavior: SnackBarBehavior.floating,
-      duration: const Duration(seconds: 3),
-    ),
-  );
-}
+  void _showSnack(
+    ScaffoldMessengerState messenger,
+    ThemeData theme,
+    String msg, {
+    bool ok = false,
+  }) {
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: ok ? Colors.green : theme.colorScheme.error,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
 }
