@@ -1,0 +1,82 @@
+# ----------------------------
+# General / Misc
+# ----------------------------
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ / Android Studio
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# VS Code
+.vscode/
+
+# ----------------------------
+# Flutter / Dart / Pub
+# ----------------------------
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+build/
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.metadata
+
+# ----------------------------
+# Android
+# ----------------------------
+android/.gradle/
+android/app/build/
+android/app/debug/
+android/app/profile/
+android/app/release/
+
+# ----------------------------
+# iOS
+# ----------------------------
+ios/Pods/
+.ios/
+
+# ----------------------------
+# Build artifacts / binaries
+# ----------------------------
+*.apk
+*.aab
+*.ipa
+*.xcarchive
+*.symbols
+*.map.json
+*.zip
+
+# ----------------------------
+# Keys / Credentials (NEVER commit)
+# ----------------------------
+key.properties
+**/*.keystore
+**/*.jks
+**/*.p12
+
+# ----------------------------
+# Logs
+# ----------------------------
+*.log
+
+# ----------------------------
+# Custom project utils (local only)
+# ----------------------------
+lib/utils/logger.dart
+lib/utils/shop_metrics_helper.dart
