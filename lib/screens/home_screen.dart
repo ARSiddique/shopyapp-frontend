@@ -19,6 +19,8 @@ import '../screens/add_expense_screen.dart';
 import '../screens/expenses_screen.dart';
 import '../screens/add_payment_screen.dart';
 import '../screens/payments_screen.dart';
+import '../utils/order_flow.dart'; // ⬅️ add this
+
 
 
 void showPlatformLogoutDialog(BuildContext context) {
@@ -290,13 +292,10 @@ void showShopActions(BuildContext context, String shopName) {
           ListTile(
             leading: const Icon(Icons.receipt_long),
             title: const Text('Add Order'),
-            onTap: () {
-              Navigator.pop(context);
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const AddOrderScreen()),
-              );
-            },
+           onTap: () async {
+  Navigator.pop(context);
+  await startAddOrderFlow(context);
+},
           ),
           ListTile(
             leading: const Icon(Icons.trending_up),

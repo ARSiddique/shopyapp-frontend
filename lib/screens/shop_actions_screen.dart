@@ -1,9 +1,11 @@
+// lib/screens/shop_actions_screen.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_data_provider.dart';
 import 'add_sale_screen.dart';
 import 'transactions_screen.dart';
 import 'transaction_report_screen.dart';
+import 'orders_screen.dart';
 
 class ShopActionsScreen extends StatelessWidget {
   final String shopName;
@@ -12,7 +14,10 @@ class ShopActionsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppDataProvider>();
-    final isEmployee = app.isEmployee; // role check
+
+    // ✅ Ab teenon roles (employee + admin + manager) Daily Sale kar sakte hain
+    final canPostDailySale = app.isEmployee || app.isAdmin || app.isManager;
+    final isEmployee = app.isEmployee;
     final cols = MediaQuery.of(context).size.width >= 900 ? 3 : 2;
 
     return Scaffold(
@@ -25,26 +30,45 @@ class ShopActionsScreen extends StatelessWidget {
           crossAxisSpacing: 16,
           childAspectRatio: 1.2,
           children: [
+            // 🔓 show for all 3 roles
+            if (canPostDailySale)
+              _Tile(
+                label: 'Daily Sale',
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => AddSaleScreen(shopName: shopName),
+                  ),
+                ),
+              ),
+
             _Tile(
-              label: 'Daily Sale',
+              label: 'Transactions',
               onTap: () => Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => AddSaleScreen(shopName: shopName)),
+                MaterialPageRoute(
+                  builder: (_) => TransactionsScreen(shopName: shopName),
+                ),
               ),
             ),
+
             _Tile(
-              label: 'Transaction',
+              label: 'Orders',
               onTap: () => Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => TransactionsScreen(shopName: shopName)),
+                MaterialPageRoute(builder: (_) => const OrdersScreen()),
               ),
             ),
+
+            // History (report) admin/manager ko hi dikhayen
             if (!isEmployee)
               _Tile(
                 label: 'Transaction History',
                 onTap: () => Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => TransactionReportScreen(shopName: shopName)),
+                  MaterialPageRoute(
+                    builder: (_) => TransactionReportScreen(shopName: shopName),
+                  ),
                 ),
               ),
           ],
@@ -58,13 +82,13 @@ class _Tile extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
 
-  const _Tile({required this.label, required this.onTap}); // 🔧 removed super.key
+  const _Tile({super.key, required this.label, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
     return Card(
       elevation: 0,
-      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      color: Theme.of(context).colorScheme.surface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),

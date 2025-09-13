@@ -2,11 +2,21 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/app_data_provider.dart';
-import 'shop_actions_screen.dart'; 
+import 'shop_actions_screen.dart';
+import 'add_sale_screen.dart';
+import 'transactions_screen.dart';
 import 'login_screen.dart';
 
+enum NextAction { actions, addSale, transaction }
+
 class ShopSelectionScreen extends StatefulWidget {
-  const ShopSelectionScreen({super.key});
+  const ShopSelectionScreen({super.key, this.next = NextAction.actions});
+
+  /// After selecting a shop, where to go?
+  /// - actions: open ShopActionsScreen (Daily Sale / Transaction / History hub)
+  /// - addSale: open AddSaleScreen directly
+  /// - transaction: open TransactionsScreen directly
+  final NextAction next;
 
   @override
   State<ShopSelectionScreen> createState() => _ShopSelectionScreenState();
@@ -22,16 +32,14 @@ class _ShopSelectionScreenState extends State<ShopSelectionScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       final app = context.read<AppDataProvider>();
-     setState(() => _loading = true);
-     try {
-      if (app.shops.isEmpty) {
-         await app.fetchShops();
+      setState(() => _loading = true);
+      try {
+        if (app.shops.isEmpty) {
+          await app.fetchShops();
+        }
+      } finally {
+        if (mounted) setState(() => _loading = false);
       }
-     }finally{
-      if(mounted){
-        setState(() => _loading = false);
-      }
-     }
     });
   }
 
@@ -60,15 +68,14 @@ class _ShopSelectionScreenState extends State<ShopSelectionScreen> {
 
     // visible list
     final isEmployee = role == 'employee';
-   final visible = isEmployee
-        ? allActive
-        .where((s) => assigned.contains(s['name']!.toLowerCase()))
-        .toList()
-        : allActive;
+    final visible = isEmployee
+        ? allActive.where((s) => assigned.contains(s['name']!.toLowerCase())).toList()
+        : allActive; // admin/manager → all shops
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Select Shop'),
-         leading: Navigator.of(context).canPop() ? const BackButton() : null,
+        leading: Navigator.of(context).canPop() ? const BackButton() : null,
         actions: [
           IconButton(
             tooltip: 'Logout',
@@ -79,25 +86,24 @@ class _ShopSelectionScreenState extends State<ShopSelectionScreen> {
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-         : RefreshIndicator(
+          : RefreshIndicator(
               onRefresh: () async => context.read<AppDataProvider>().fetchShops(),
               child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: visible.isEmpty
-                  ? _emptyState(isEmployee: isEmployee)
-                  : ListView.separated(
-                      itemCount: visible.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 8),
-                      itemBuilder: (_, i) {
-                        final shop = visible[i];
-                        return _ShopTile(
-                          name: shop['name']!,
-                          onTap: () => _selectShop(shop['id']!, shop['name']!),
-                        );
-                      },
-                    ),
+                padding: const EdgeInsets.all(12),
+                child: visible.isEmpty
+                    ? _emptyState(isEmployee: isEmployee)
+                    : ListView.separated(
+                        itemCount: visible.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 8),
+                        itemBuilder: (_, i) {
+                          final shop = visible[i];
+                          return _ShopTile(
+                            name: shop['name']!,
+                            onTap: () => _selectShop(shop['id']!, shop['name']!),
+                          );
+                        },
+                      ),
               ),
-         
             ),
     );
   }
@@ -133,19 +139,33 @@ class _ShopSelectionScreenState extends State<ShopSelectionScreen> {
     final app = context.read<AppDataProvider>();
     final navigator = Navigator.of(context);
 
-    // save selection (if other parts use it)
+    // Save selection (if other parts use it)
     app.setSelectedShop(id, name);
 
-    // ✅ open ShopActionsScreen for this shop
-    await navigator.push(
-      MaterialPageRoute(
-        builder: (_) => ShopActionsScreen(shopName: name),
-      ),
-    );
+    // 🔽 Decide next screen based on 'next' param
+    switch (widget.next) {
+      case NextAction.addSale:
+        await navigator.push(
+          MaterialPageRoute(builder: (_) => AddSaleScreen(shopName: name)),
+        );
+        break;
+
+      case NextAction.transaction:
+        await navigator.push(
+          MaterialPageRoute(builder: (_) => TransactionsScreen(shopName: name)),
+        );
+        break;
+
+      case NextAction.actions:
+      default:
+        await navigator.push(
+          MaterialPageRoute(builder: (_) => ShopActionsScreen(shopName: name)),
+        );
+        break;
+    }
   }
 
   Future<void> _confirmLogout() async {
-    // ✅ pre-capture
     final navigator = Navigator.of(context);
     final app = context.read<AppDataProvider>();
 
@@ -153,8 +173,7 @@ class _ShopSelectionScreenState extends State<ShopSelectionScreen> {
           context: context,
           builder: (ctx) => AlertDialog(
             title: const Text('Logout?'),
-            content:
-                const Text('You will be signed out and returned to the login screen.'),
+            content: const Text('You will be signed out and returned to the login screen.'),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx, false),

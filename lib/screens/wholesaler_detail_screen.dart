@@ -1,4 +1,7 @@
+// lib/screens/wholesaler_detail_screen.dart
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../providers/app_data_provider.dart';
 import 'add_order_screen.dart';
 
 class WholesalerDetailScreen extends StatelessWidget {
@@ -10,6 +13,9 @@ class WholesalerDetailScreen extends StatelessWidget {
     final name = (wholesaler['name'] ?? '').toString();
     final phone = (wholesaler['phone'] ?? '').toString();
     final address = (wholesaler['address'] ?? '').toString();
+
+    final app = context.watch<AppDataProvider>();
+    final shopName = app.selectedShopName ?? '';
 
     return Scaffold(
       appBar: AppBar(title: Text(name.isEmpty ? 'Wholesaler' : name)),
@@ -36,9 +42,21 @@ class WholesalerDetailScreen extends StatelessWidget {
             icon: const Icon(Icons.receipt_long),
             label: const Text('Add Order for this Wholesaler'),
             onPressed: () {
-              // Abhi AddOrderScreen name input maangta hai — future me name prefill karna ho to
-              // AddOrderScreen ko optional param do. For now just open.
-              Navigator.push(context, MaterialPageRoute(builder: (_) => const AddOrderScreen()));
+              if (shopName.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Please select a shop first.')),
+                );
+                return;
+              }
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => AddOrderScreen(
+                    shopName: shopName,             // ⬅️ prefilled
+                    wholesalerName: name,           // ⬅️ prefilled
+                  ),
+                ),
+              );
             },
           ),
         ],

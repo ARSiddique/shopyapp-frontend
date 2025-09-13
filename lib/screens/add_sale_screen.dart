@@ -10,7 +10,7 @@ import 'login_screen.dart';
 
 class AddSaleScreen extends StatefulWidget {
   final Map<String, dynamic>? existingSale; // edit flow
-  final String? shopName; // for employee flow (locked from selection)
+  final String? shopName; // for employee/admin flow when shop preselected
 
   const AddSaleScreen({super.key, this.existingSale, this.shopName});
 
@@ -46,14 +46,9 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     _cardC.text = _numToText(s['card']);
     _otherC.text = _numToText(s['other']);
 
-    final dt = s['createdAt'] is DateTime
-        ? s['createdAt'] as DateTime
-        : (s['createdAt'] is Timestamp
-            ? (s['createdAt'] as Timestamp).toDate()
-            : DateTime.now());
-    final today = DateTime.now();
-    final base = DateTime(today.year, today.month, today.day);
-    final d = DateTime(dt.year, dt.month, dt.day);
+    final dt = _toDate(s['createdAt']);
+    final base = _dayOnly(DateTime.now());
+    final d = _dayOnly(dt);
     if (d == base) {
       _dayChoice = 'today';
     } else if (d == base.subtract(const Duration(days: 1))) {
@@ -94,7 +89,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     final shopOptions =
         isEmployee ? allShops.where((s) => assigned.contains(s)).toList() : allShops;
 
-    // Decide selected shop (priority: existingSale -> widget.shopName -> first available)
+    // Decide selected shop
     _selectedShop ??= (widget.existingSale?['shop']?.toString().isNotEmpty == true)
         ? widget.existingSale!['shop'].toString()
         : (widget.shopName?.isNotEmpty == true
@@ -109,7 +104,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     final isEditing = widget.existingSale != null;
     final total = _parse(_cashC.text) + _parse(_cardC.text) + _parse(_otherC.text);
 
-    // ---------- PopScope (predictive back compatible) ----------
+    // PopScope controls back behavior for multi-shop employees
     final blockBackForSingleShopEmployee = isEmployee && !hasMultipleAssigned;
     final interceptBackToSelection = shouldShowBackToSelection;
     final canPop = !(blockBackForSingleShopEmployee || interceptBackToSelection);
@@ -117,15 +112,13 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     return PopScope(
       canPop: canPop,
       onPopInvokedWithResult: (didPop, result) {
-        if (didPop) return; // default pop already happened
-        // Multi-shop employee: instead of popping, go to shop selection
+        if (didPop) return;
         if (interceptBackToSelection) {
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(builder: (_) => const ShopSelectionScreen()),
           );
         }
-        // Single-shop employee: do nothing (block back)
       },
       child: Scaffold(
         appBar: AppBar(
@@ -133,11 +126,8 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
           title: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(isEditing ? 'Edit Sale' : 'Add Sale'),
-              Text(
-                appBarTitleShop,
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
+              Text(isEditing ? 'Edit Daily Sale' : 'Add Daily Sale'),
+              Text(appBarTitleShop, style: Theme.of(context).textTheme.bodySmall),
             ],
           ),
           actions: [
@@ -199,8 +189,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
                             child: ChoiceChip(
                               label: const Text('Yesterday'),
                               selected: _dayChoice == 'yesterday',
-                              onSelected: (_) =>
-                                  setState(() => _dayChoice = 'yesterday'),
+                              onSelected: (_) => setState(() => _dayChoice = 'yesterday'),
                             ),
                           ),
                         ],
@@ -242,47 +231,46 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(
-          color: Theme.of(context).dividerColor.withValues(alpha: 0.4),
+          color: Theme.of(context).dividerColor.withAlpha(100),
         ),
       ),
       child: ListTile(
         leading: const CircleAvatar(child: Icon(Icons.store)),
-        title:
-            const Text('Selected shop', style: TextStyle(fontWeight: FontWeight.w600)),
+        title: const Text('Selected shop', style: TextStyle(fontWeight: FontWeight.w600)),
         subtitle: Text(shop.isEmpty ? '—' : shop),
         trailing: const Icon(Icons.check_circle, color: Colors.green),
       ),
     );
   }
 
-  Widget _amountField(TextEditingController c, String label) {
-    return TextFormField(
-      controller: c,
-      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-      inputFormatters: [
-        FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
-      ],
-      decoration: InputDecoration(
-        labelText: label,
-        border: const OutlineInputBorder(),
-        prefixText: r'$ ',
-      ),
-      validator: (v) {
-        if (v == null || v.trim().isEmpty) return null; // optional
-        final d = double.tryParse(v);
-        if (d == null) return 'Invalid number';
-        if (d < 0) return 'Must be ≥ 0';
-        return null;
-      },
-      onChanged: (_) => setState(() {}),
-    );
-  }
+Widget _amountField(TextEditingController c, String label) {
+  return TextFormField(
+    controller: c,
+    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+    inputFormatters: [
+      FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
+    ],
+    decoration: InputDecoration( // ⟵ const hata diya
+      labelText: label,
+      border: const OutlineInputBorder(),
+      prefixText: r'$ ',
+    ),
+    validator: (v) {
+      if (v == null || v.trim().isEmpty) return null;
+      final d = double.tryParse(v);
+      if (d == null) return 'Invalid number';
+      if (d < 0) return 'Must be ≥ 0';
+      return null;
+    },
+    onChanged: (_) => setState(() {}),
+  );
+}
 
   Widget _totalBar(double total) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
       decoration: BoxDecoration(
-        color: Colors.grey.withValues(alpha: 0.07),
+        color: Colors.grey.withAlpha(18),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.black12),
       ),
@@ -292,7 +280,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
           const SizedBox(width: 10),
           const Text('Total', style: TextStyle(fontWeight: FontWeight.w600)),
           const Spacer(),
-         Text('\$ ${total.toStringAsFixed(0)}',
+          Text('\$ ${total.toStringAsFixed(0)}',
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
         ],
       ),
@@ -309,7 +297,6 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
   }
 
   Future<void> _confirmLogout() async {
-    // ✅ pre-capture to avoid using BuildContext after awaits
     final app = context.read<AppDataProvider>();
     final navigator = Navigator.of(context);
 
@@ -347,12 +334,12 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
 
   DateTime _selectedDate() {
     final now = DateTime.now();
-    final base = DateTime(now.year, now.month, now.day);
+    final base = _dayOnly(now);
     return _dayChoice == 'today' ? base : base.subtract(const Duration(days: 1));
   }
 
   (DateTime, DateTime) _dayBounds(DateTime date) {
-    final start = DateTime(date.year, date.month, date.day);
+    final start = _dayOnly(date);
     final end = start.add(const Duration(days: 1));
     return (start, end);
   }
@@ -365,8 +352,16 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     return (d == 0) ? '' : d.toStringAsFixed(d % 1 == 0 ? 0 : 2);
   }
 
+  DateTime _toDate(dynamic raw) {
+    if (raw is DateTime) return raw;
+    if (raw is Timestamp) return raw.toDate();
+    if (raw is String) return DateTime.tryParse(raw) ?? DateTime.now();
+    return DateTime.now();
+  }
+
+  DateTime _dayOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
   Future<void> _submitSale() async {
-    // pre-capture (avoid context after await)
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
     final theme = Theme.of(context);
@@ -379,11 +374,9 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
 
     final app = context.read<AppDataProvider>();
     final me = app.loggedInUser ?? {};
-    final name = (me['name'] ?? '').toString();
     final role = (me['role'] ?? '').toString().toLowerCase();
-    final isEmployee = role == 'employee';
-    final assignedShops =
-        (me['assignedShops'] as List? ?? []).map((e) => e.toString()).toList();
+  final isEmployee = role == 'employee'; // 
+    final name = (me['name'] ?? '').toString();
 
     final cash = _parse(_cashC.text);
     final card = _parse(_cardC.text);
@@ -393,16 +386,15 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     setState(() => _loading = true);
     try {
       final chosen = _selectedDate();
-      final (from, to) = _dayBounds(chosen);
+      final (from, _) = _dayBounds(chosen);
+      final dayKey = app.dayKeyOf(chosen);
 
-      // one-sale-per-shop-per-day
+      // ❗ hard duplicate check by dayKey (manual or close-day — both)
       final dupQ = FirebaseFirestore.instance
           .collection('sales')
           .where('shop', isEqualTo: _selectedShop)
-          .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(from))
-          .where('createdAt', isLessThan: Timestamp.fromDate(to))
+          .where('dayKey', isEqualTo: dayKey)
           .limit(1);
-
       final dupSnap = await dupQ.get();
       if (dupSnap.docs.isNotEmpty) {
         if (!mounted) return;
@@ -426,30 +418,25 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
         'other': other,
         'total': total,
         'createdAt': Timestamp.fromDate(createdAt),
+        'dayKey': dayKey,                 // 👈 for uniqueness & reporting
+        'source': 'employee_manual',      // 👈 provenance
       };
 
-      final doc = await FirebaseFirestore.instance.collection('sales').add(data);
+      await FirebaseFirestore.instance.collection('sales').add(data);
 
       await app.fetchSales();
       if (!mounted) return;
-      _showSnack(messenger, theme, 'Sale added (ID: ${doc.id})', ok: true);
+      _showSnack(messenger, theme, 'Sale added', ok: true);
 
       // ----- role-aware navigation after submit -----
       if (isEmployee) {
-        if (assignedShops.length > 1) {
-          // Multi-shop → back to selection
-          navigator.pushReplacement(
-            MaterialPageRoute(builder: (_) => const ShopSelectionScreen()),
-          );
-        } else {
-          // Single-shop → stay on this screen, reset form
-          _cashC.clear();
-          _cardC.clear();
-          _otherC.clear();
-          setState(() => _dayChoice = 'today');
-        }
+        // Employee: reset so he can add next day’s sale if needed
+        _cashC.clear();
+        _cardC.clear();
+        _otherC.clear();
+        setState(() => _dayChoice = 'today');
       } else {
-        // Admin/Manager → return to previous screen
+        // Admin/Manager → return to previous
         navigator.pop();
       }
     } catch (e) {
@@ -461,7 +448,6 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
   }
 
   Future<void> _updateSale() async {
-    // pre-capture (avoid context after await)
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
     final theme = Theme.of(context);
@@ -476,8 +462,6 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     }
 
     final app = context.read<AppDataProvider>();
-    final me = app.loggedInUser ?? {};
-    final role = (me['role'] ?? '').toString().toLowerCase();
 
     final cash = _parse(_cashC.text);
     final card = _parse(_cardC.text);
@@ -499,15 +483,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
       await app.fetchSales();
       if (!mounted) return;
       _showSnack(messenger, theme, 'Sale updated', ok: true);
-
-      // Employees generally cannot edit; but if they do, keep consistent:
-      if (role == 'employee') {
-        navigator.pushReplacement(
-          MaterialPageRoute(builder: (_) => const ShopSelectionScreen()),
-        );
-      } else {
-        navigator.pop();
-      }
+      navigator.pop();
     } catch (e) {
       if (!mounted) return;
       _showSnack(messenger, theme, 'Error: $e');

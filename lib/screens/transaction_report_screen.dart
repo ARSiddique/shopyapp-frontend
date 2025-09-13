@@ -1,7 +1,15 @@
+// lib/screens/transaction_report_screen.dart
+import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:pdf/pdf.dart';
+import 'package:printing/printing.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
+
 import '../providers/app_data_provider.dart';
 
 class TransactionReportScreen extends StatefulWidget {
@@ -15,151 +23,365 @@ class TransactionReportScreen extends StatefulWidget {
 class _TransactionReportScreenState extends State<TransactionReportScreen> {
   DateTime _day = DateTime.now();
 
-  String get _key => DateFormat('yyyy-MM-dd').format(_day);
-  String get _pretty => DateFormat('MMM d, yyyy').format(_day);
-
-  void _prev() => setState(() => _day = _day.subtract(const Duration(days: 1)));
-  void _next() => setState(() => _day = _day.add(const Duration(days: 1)));
-
-  bool get _isToday {
-    final now = DateTime.now();
-    final a = DateTime(_day.year, _day.month, _day.day);
-    final b = DateTime(now.year, now.month, now.day);
-    return a == b;
-  }
+  // cache for export
+  List<_TxRow> _lastRows = [];
+  String _lastHeader = '';
 
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppDataProvider>();
-
-    // block employees from viewing (per your policy)
-    if (app.isEmployee == true) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Transactions')),
-        body: const Center(child: Text('Not authorized')),
-      );
-    }
-
-    // NOTE: This uses string dayKey "yyyy-MM-dd" — keep it if your data is like this.
-    // If you store Timestamp dayKey, change to where('dayKey', isEqualTo: Timestamp.fromDate(...)).
-    final q = FirebaseFirestore.instance
-        .collection('transactions')
-        .where('shopName', isEqualTo: widget.shopName)
-        .where('dayKey', isEqualTo: _key)
-        .orderBy('createdAt', descending: true)
-        .snapshots();
+    final key = app.dayKeyOf(_day);
 
     return Scaffold(
-      appBar: AppBar(title: Text('Transactions · ${widget.shopName}')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(children: [
-          Row(children: [
-            IconButton(onPressed: _prev, icon: const Icon(Icons.chevron_left)),
-            Text(_pretty, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-            IconButton(onPressed: _isToday ? null : _next, icon: const Icon(Icons.chevron_right)),
-            const Spacer(),
-            FilledButton(
-              onPressed: () async {
-                // capture & guard context safely
-                final ctx = context;
-                final navigator = Navigator.of(ctx);
-                final messenger = ScaffoldMessenger.of(ctx);
-                final appRead = ctx.read<AppDataProvider>();
-
-                final totals = await appRead.computeDailyTransactionTotals(
-                  widget.shopName,
-                  _day,
-                );
-
-                if (!mounted) return;
-
-                showDialog(
-                  context: ctx,
-                  builder: (dialogCtx) => AlertDialog(
-                    title: const Text('Daily Summary'),
-                    content: Text(
-                      'Cash:  ₨${(totals['cash'] ?? 0).toStringAsFixed(2)}\n'
-                      'Card:  ₨${(totals['card'] ?? 0).toStringAsFixed(2)}\n'
-                      'Other: ₨${(totals['other'] ?? 0).toStringAsFixed(2)}\n'
-                      '———————————————\n'
-                      'Total: ₨${(totals['total'] ?? 0).toStringAsFixed(2)}',
-                    ),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(dialogCtx),
-                        child: const Text('Close'),
-                      ),
-                      FilledButton(
-                        onPressed: () async {
-                          navigator.pop(); // close dialog
-                          final res = await appRead.postDailySaleFromTransactions(
-                            shopName: widget.shopName,
-                            day: _day,
-                          );
-                          if (!mounted) return;
-                          messenger.showSnackBar(
-                            SnackBar(content: Text(res ?? 'Daily sale posted')),
-                          );
-                        },
-                        child: const Text('Close Day & Post Sale'),
-                      ),
-                    ],
-                  ),
-                );
-              },
-              child: const Text('Summary / Close Day'),
-            )
-          ]),
-          const SizedBox(height: 12),
+      appBar: AppBar(
+        title: Text('Transactions · ${widget.shopName}'),
+        actions: [
+          IconButton(
+            tooltip: 'Export PDF',
+            icon: const Icon(Icons.picture_as_pdf_outlined),
+            onPressed: _exportPdf,
+          ),
+          IconButton(
+            tooltip: 'Export CSV',
+            icon: const Icon(Icons.table_chart_outlined),
+            onPressed: _exportCsv,
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          _dateHeader(app),
+          const Divider(height: 1),
           Expanded(
             child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: q,
-              builder: (c, s) {
-                if (s.connectionState == ConnectionState.waiting) {
+              // no orderBy → no composite index requirement
+              stream: FirebaseFirestore.instance
+                  .collection('transactions')
+                  .where('shopName', isEqualTo: widget.shopName)
+                  .where('dayKey', isEqualTo: key)
+                  .snapshots(),
+              builder: (ctx, snap) {
+                if (snap.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
                 }
-                final docs = s.data?.docs ?? const [];
-                if (docs.isEmpty) return const Center(child: Text('No transactions for this day'));
+                if (snap.hasError) {
+                  return Center(child: Text('Error: ${snap.error}'));
+                }
+
+                final docs = (snap.data?.docs ?? []).toList();
+
+                // client-side sort by createdAt desc
+                docs.sort((a, b) {
+                  DateTime da = _toDate(a.data()['createdAt']);
+                  DateTime db = _toDate(b.data()['createdAt']);
+                  return db.compareTo(da);
+                });
+
+                final rows = docs.map(_mapDoc).toList();
+
+                // cache for export
+                _lastRows = rows;
+                _lastHeader = '${widget.shopName} • ${DateFormat('dd MMM, yyyy').format(_day)}';
+
+                if (rows.isEmpty) {
+                  return const Center(child: Text('No transactions for this day'));
+                }
 
                 return ListView.separated(
-                  itemCount: docs.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  padding: const EdgeInsets.all(12),
+                  itemCount: rows.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 8),
                   itemBuilder: (_, i) {
-                    final d = docs[i].data();
-                    final t = (d['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now();
-                    final time = DateFormat('HH:mm:ss').format(t);
-                    final method = (d['method'] ?? '').toString().toUpperCase();
-                    final amt = (d['amount'] as num?)?.toDouble() ?? 0;
-                    final refund = (d['isRefund'] == true) || (d['refund'] == true);
-                    final isNeg = refund || amt < 0;
-                    final absAmt = amt.abs();
+                    final r = rows[i];
+                    final method = r.method == 'cash'
+                        ? 'Cash'
+                        : r.method == 'card'
+                            ? 'Card'
+                            : 'Other';
+                    final when = DateFormat('hh:mm a').format(r.createdAt);
+                    final sign = r.isRefund ? '-' : '+';
 
-                    Color chipBg() {
-                      switch (method) {
-                        case 'CASH': return Colors.green.withValues(alpha: 0.12);
-                        case 'CARD': return Colors.blue.withValues(alpha: 0.12);
-                        default: return Colors.grey.withValues(alpha: 0.12);
-                      }
-                    }
-
-                    return ListTile(
-                      leading: Text(time),
-                      title: Text('${isNeg ? '-' : ''}₨${absAmt.toStringAsFixed(2)}'),
-                      trailing: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(color: chipBg(), borderRadius: BorderRadius.circular(24)),
-                        child: Text(method),
+                    return Card(
+                      child: ListTile(
+                        dense: true,
+                        title: Text(
+                          'Rs ${r.amountAbs.toStringAsFixed(2)}  $sign',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: r.isRefund ? Colors.red : null,
+                          ),
+                        ),
+                        subtitle: Text('$method  •  $when  •  ${r.createdBy ?? '-'}'),
                       ),
-                      subtitle: refund ? const Text('Refund', style: TextStyle(color: Colors.red)) : null,
                     );
                   },
                 );
               },
             ),
           ),
-        ]),
+        ],
       ),
     );
   }
+
+  // ---------- Header with date nav + CLOSED badge + Close Day button ----------
+Widget _dateHeader(AppDataProvider app) {
+  final label = DateFormat('MMM d, yyyy').format(_day);
+
+  return Padding(
+    padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+    child: LayoutBuilder(
+      builder: (ctx, cons) {
+        final tiny = cons.maxWidth < 360; // very small phones
+
+        return Row(
+          children: [
+            IconButton(
+              icon: const Icon(Icons.chevron_left),
+              onPressed: () => setState(() => _day = _day.subtract(const Duration(days: 1))),
+            ),
+
+            // Center label always gets to flex and can ellipsize
+            Expanded(
+              child: FutureBuilder<bool>(
+                future: app.isDayClosed(widget.shopName, _day),
+                builder: (ctx, s) {
+                  final closed = s.data == true;
+                  return Text(
+                    closed ? '$label — CLOSED' : label,
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                  );
+                },
+              ),
+            ),
+
+            IconButton(
+              icon: const Icon(Icons.chevron_right),
+              onPressed: () => setState(() => _day = _day.add(const Duration(days: 1))),
+            ),
+
+            const SizedBox(width: 6),
+
+            // Close-day action shrinks instead of overflowing
+            FutureBuilder<bool>(
+              future: app.isDayClosed(widget.shopName, _day),
+              builder: (ctx, s) {
+                final closed = s.data == true;
+
+                final button = TextButton.icon(
+                  icon: const Icon(Icons.summarize_outlined, size: 18),
+                  label: Text(closed ? 'Day Closed' : 'Summary / Close Day'),
+                  onPressed: closed ? null : () => _openCloseDaySheet(app),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    minimumSize: const Size(0, 36),
+                  ),
+                );
+
+                // On tiny screens, show icon-only to save space
+                if (tiny) {
+                  return IconButton(
+                    tooltip: closed ? 'Day Closed' : 'Summary / Close Day',
+                    icon: const Icon(Icons.summarize_outlined),
+                    onPressed: closed ? null : () => _openCloseDaySheet(app),
+                  );
+                }
+
+                // Otherwise scale down if needed (prevents overflow)
+                return FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 170),
+                    child: button,
+                  ),
+                );
+              },
+            ),
+          ],
+        );
+      },
+    ),
+  );
+}
+
+  // ---------- Summary & Close sheet ----------
+  Future<void> _openCloseDaySheet(AppDataProvider app) async {
+    final totals = await app.computeDailyTransactionTotals(widget.shopName, _day);
+    if (!mounted) return;
+
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Summary • ${DateFormat('dd MMM, yyyy').format(_day)}',
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 12),
+            _kv('Cash',  'Rs ${(totals['cash'] ?? 0).toStringAsFixed(0)}'),
+            _kv('Card',  'Rs ${(totals['card'] ?? 0).toStringAsFixed(0)}'),
+            _kv('Other', 'Rs ${(totals['other'] ?? 0).toStringAsFixed(0)}'),
+            const Divider(),
+            _kv('Total', 'Rs ${(totals['total'] ?? 0).toStringAsFixed(0)}'),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const Spacer(),
+                FilledButton.icon(
+                  icon: const Icon(Icons.publish_outlined),
+                  label: const Text('Close Day (Post Sale)'),
+                  onPressed: () async {
+                    final err = await app.postDailySaleFromTransactions(
+                      shopName: widget.shopName,
+                      day: _day,
+                    );
+                    if (!mounted) return;
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(err ?? 'Daily Sale posted')),
+                    );
+                    setState(() {}); // refresh badge
+                  },
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ---------- Exports ----------
+  Future<void> _exportCsv() async {
+    if (_lastRows.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nothing to export')),
+      );
+      return;
+    }
+
+    final b = StringBuffer();
+    b.writeln('Shop,Date,Time,Method,Amount,Type,By');
+
+    for (final r in _lastRows) {
+      b.writeln([
+        _csvEsc(widget.shopName),
+        DateFormat('yyyy-MM-dd').format(_day),
+        DateFormat('HH:mm:ss').format(r.createdAt),
+        r.method,
+        r.amountAbs.toStringAsFixed(2),
+        r.isRefund ? 'refund' : 'sale',
+        _csvEsc(r.createdBy ?? ''),
+      ].join(','));
+    }
+
+    final dir = await getTemporaryDirectory();
+    final name = 'transactions_${widget.shopName}_${DateFormat('yyyyMMdd').format(_day)}.csv';
+    final file = File('${dir.path}/$name');
+    await file.writeAsString(b.toString(), flush: true);
+
+    await Share.shareXFiles([XFile(file.path)], text: _lastHeader);
+  }
+
+  Future<void> _exportPdf() async {
+    if (_lastRows.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nothing to export')),
+      );
+      return;
+    }
+
+    final pdf = pw.Document();
+    final dateText = DateFormat('dd MMM, yyyy').format(_day);
+
+    pdf.addPage(
+      pw.MultiPage(
+        build: (ctx) => [
+          pw.Text('Transaction Report',
+              style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
+          pw.SizedBox(height: 4),
+          pw.Text('Shop: ${widget.shopName}'),
+          pw.Text('Date: $dateText'),
+          pw.SizedBox(height: 12),
+          pw.TableHelper.fromTextArray(
+            headers: const ['Time', 'Method', 'Type', 'Amount', 'By'],
+            data: _lastRows.map((r) {
+              return [
+                DateFormat('HH:mm:ss').format(r.createdAt),
+                r.method,
+                r.isRefund ? 'refund' : 'sale',
+                r.amountAbs.toStringAsFixed(2),
+                r.createdBy ?? '',
+              ];
+            }).toList(),
+            headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+            headerDecoration: pw.BoxDecoration(color: PdfColors.grey300),
+            cellStyle: const pw.TextStyle(fontSize: 10),
+            cellAlignment: pw.Alignment.centerLeft,
+          ),
+        ],
+      ),
+    );
+
+    final bytes = await pdf.save();
+    final name =
+        'transactions_${widget.shopName}_${DateFormat('yyyyMMdd').format(_day)}.pdf';
+    await Printing.sharePdf(bytes: bytes, filename: name);
+  }
+
+  // ---------- helpers ----------
+  static DateTime _toDate(dynamic raw) {
+    if (raw is Timestamp) return raw.toDate();
+    if (raw is DateTime) return raw;
+    if (raw is String) return DateTime.tryParse(raw) ?? DateTime.now();
+    return DateTime.now();
+  }
+
+  static String _csvEsc(String s) {
+    final needs = s.contains(',') || s.contains('\n') || s.contains('"');
+    if (!needs) return s;
+    return '"${s.replaceAll('"', '""')}"';
+  }
+
+  _TxRow _mapDoc(QueryDocumentSnapshot<Map<String, dynamic>> d) {
+    final m = d.data();
+    final createdAt = _toDate(m['createdAt']);
+    final amount = (m['amount'] as num?)?.toDouble() ?? 0.0;
+    final refund = (m['isRefund'] ?? false) == true;
+
+    return _TxRow(
+      createdAt: createdAt,
+      amountAbs: amount.abs(),
+      isRefund: refund || amount.isNegative,
+      method: (m['method'] ?? '').toString(), // 'cash'|'card'|'other'
+      createdBy: (m['createdByName'] ?? m['createdBy'] ?? '').toString(),
+    );
+  }
+
+  Widget _kv(String k, String v) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(children: [Expanded(child: Text(k)), Text(v)]),
+      );
+}
+
+class _TxRow {
+  final DateTime createdAt;
+  final double amountAbs;
+  final bool isRefund;
+  final String method;
+  final String? createdBy;
+
+  _TxRow({
+    required this.createdAt,
+    required this.amountAbs,
+    required this.isRefund,
+    required this.method,
+    required this.createdBy,
+  });
 }

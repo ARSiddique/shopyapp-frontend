@@ -32,54 +32,50 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   Future<void> _navigate() async {
-    try {
-      final appData = context.read<AppDataProvider>();
+  try {
+    final appData = context.read<AppDataProvider>();
 
-// 🔐 Ensure session is restored *now* (auth-first version in provider)
-await appData.restoreSession();
+    // 1) Sirf session restore
+    await appData.restoreSession();
+    final user = appData.loggedInUser;
 
-// Warm up data after session is settled
-await appData.fetchAllData();
-appData.startFirebaseListeners();
+    if (!mounted) return;
 
-
-      final user = appData.loggedInUser;
-
-      if (!mounted) return;
-      if (user == null) {
-        // -> Login
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const LoginScreen()),
-        );
-        return;
-      }
-
-      final role = (user['role'] ?? '').toString().toLowerCase();
-      final assignedShops =
-          (user['assignedShops'] as List? ?? []).map((e) => e.toString()).toList();
-
-      Widget next;
-
-      if (role == 'employee') {
-        if (assignedShops.length == 1) {
-          next = AddSaleScreen(shopName: assignedShops.first);
-        } else {
-          next = const ShopSelectionScreen(); // 0 ya >1 → yahan handle
-        }
-      } else {
-        next = const HomeScreen();
-      }
-
+    // 2) Agar user NAHI mila -> direct Login (yahan koi Firestore call nahi!)
+    if (user == null) {
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => next),
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
       );
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _hasError = true);
+      return;
     }
+
+    // 3) User mila -> ab data warm-up & live listeners
+    await appData.fetchAllData();
+    appData.startFirebaseListeners();
+
+    // 4) Role based navigation
+    final role = (user['role'] ?? '').toString().toLowerCase();
+    final assignedShops =
+        (user['assignedShops'] as List? ?? []).map((e) => e.toString()).toList();
+
+    Widget next;
+    if (role == 'employee') {
+      if (assignedShops.length == 1) {
+        next = AddSaleScreen(shopName: assignedShops.first);
+      } else {
+        next = const ShopSelectionScreen();
+      }
+    } else {
+      next = const HomeScreen();
+    }
+
+    Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => next));
+  } catch (_) {
+    if (!mounted) return;
+    setState(() => _hasError = true);
   }
+}
 
   @override
   void dispose() {

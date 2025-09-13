@@ -41,7 +41,13 @@ class _LoginScreenState extends State<LoginScreen> {
       _isLoading = true;
       _error = null;
     });
-
+ if (_emailController.text.trim().isEmpty || _passwordController.text.isEmpty) {
+    setState(() {
+      _isLoading = false;
+      _error = 'Email and password required.';
+    });
+    return;
+  }
     final success = await appData.loginWithEmailAndPassword(
       _emailController.text.trim(),
       _passwordController.text.trim(),
@@ -52,7 +58,7 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!success) {
       setState(() {
         _isLoading = false;
-        _error = 'Login failed. Please check your credentials.';
+      _error = 'Invalid email or password, or your account has no Firestore access.';
       });
       return;
     }

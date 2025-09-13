@@ -12,6 +12,7 @@ import 'package:pdf/widgets.dart' as pw;
 
 import '../providers/app_data_provider.dart';
 import 'add_sale_screen.dart';
+import 'shop_selection_screen.dart';
 
 class SalesScreen extends StatefulWidget {
   const SalesScreen({super.key});
@@ -22,13 +23,13 @@ class SalesScreen extends StatefulWidget {
 
 class _SalesScreenState extends State<SalesScreen> {
   // ---- Filters ----
-  String _period = 'Daily'; // Daily | Weekly | Monthly | Yearly | Specific Date | Date Range
+  String _period = 'Daily';
   String _selectedShop = 'All';
-  DateTime _anchorDate = DateTime.now(); // for non-range periods + specific date
-  DateTimeRange? _range; // for "Date Range"
+  DateTime _anchorDate = DateTime.now();
+  DateTimeRange? _range;
 
-  // Daily/SpecificDate + today cutoff (no sale → red row)
-  final int _cutoffHour = 21; // 9 PM (as per your earlier logic)
+  // Daily/SpecificDate + today cutoff
+  final int _cutoffHour = 21;
 
   // Export cache
   List<_ShopRow> _lastRows = [];
@@ -39,7 +40,6 @@ class _SalesScreenState extends State<SalesScreen> {
   Widget build(BuildContext context) {
     final app = context.watch<AppDataProvider>();
 
-    // Active shops
     final shops = app.shops
         .where((s) => (s['isDeleted'] ?? false) != true)
         .map((s) => (s['name'] ?? '').toString())
@@ -47,15 +47,12 @@ class _SalesScreenState extends State<SalesScreen> {
         .toList()
       ..sort();
 
-    // Dropdown options
     final allShopOptions = ['All', ...shops];
 
-    // If selected shop vanished, fallback to All
     if (_selectedShop != 'All' && !shops.contains(_selectedShop)) {
       _selectedShop = 'All';
     }
 
-    // Visible list for table (only selected shop appears)
     final visibleShops = (_selectedShop != 'All' && shops.contains(_selectedShop))
         ? <String>[_selectedShop]
         : shops;
@@ -78,17 +75,31 @@ class _SalesScreenState extends State<SalesScreen> {
             onPressed: _exportCsv,
             icon: const Icon(Icons.table_chart_outlined),
           ),
+
+          // Add Sale: Admin/Manager -> ShopSelection (Actions hub), Employee -> direct form
           IconButton(
             tooltip: 'Add Sale',
             onPressed: () {
-              final navigator = Navigator.of(context);
-              navigator.push(
-                MaterialPageRoute(builder: (_) => const AddSaleScreen()),
-              );
+              final app = context.read<AppDataProvider>();
+              final isAdminOrManager = app.isAdmin || app.isManager;
+              if (isAdminOrManager) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const ShopSelectionScreen(next: NextAction.actions),
+                  ),
+                );
+              } else {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const AddSaleScreen()),
+                );
+              }
             },
             icon: const Icon(Icons.add),
           ),
-          // Admin/Manager: compute+post daily sale from transactions
+
+          // Admin/Manager only: compute+post from transactions
           Builder(
             builder: (ctx) {
               final app = ctx.watch<AppDataProvider>();
@@ -120,7 +131,7 @@ class _SalesScreenState extends State<SalesScreen> {
               from: from,
               to: to,
               selectedShop: _selectedShop,
-              allShops: visibleShops, // <= only selected shop if filtered
+              allShops: visibleShops,
             ),
           ),
         ],
@@ -180,8 +191,6 @@ class _SalesScreenState extends State<SalesScreen> {
                     _period = v;
                     if (_period != 'Date Range') _range = null;
                   });
-
-                  // Auto-open the relevant picker after dropdown closes
                   Future.microtask(() async {
                     if (!mounted) return;
                     if (_period == 'Specific Date') {
@@ -200,7 +209,7 @@ class _SalesScreenState extends State<SalesScreen> {
             ),
             const SizedBox(width: 12),
 
-            // Explicit pickers (buttons) still available
+            // Picker button
             if (isRange)
               _rangePickerButton(theme)
             else
@@ -279,7 +288,7 @@ class _SalesScreenState extends State<SalesScreen> {
     if (picked != null) setState(() => _range = picked);
   }
 
-  // --------------------- DATA TABLE (stream + fallback) ---------------------
+  // --------------------- DATA TABLE ---------------------
 
   Widget _tableStream({
     required DateTime from,
@@ -302,7 +311,6 @@ class _SalesScreenState extends State<SalesScreen> {
         if (snap.hasError) {
           final err = snap.error;
           if (err is FirebaseException && err.code == 'failed-precondition') {
-            // fallback: loose + local filter
             final loose = app.buildSalesQueryLoose(
               shop: filterByShop ? selectedShop : null,
             );
@@ -344,7 +352,6 @@ class _SalesScreenState extends State<SalesScreen> {
   List<_ShopRow> _aggregate(List<Map<String, dynamic>> sales, List<String> allShops) {
     final map = <String, _ShopRow>{};
 
-    // pre-seed so every shop shows even with no sale
     for (final s in allShops) {
       map[s] = _ShopRow(shop: s);
     }
@@ -365,7 +372,7 @@ class _SalesScreenState extends State<SalesScreen> {
       row.total += total;
       if (row.lastSaleAt == null || dt.isAfter(row.lastSaleAt!)) {
         row.lastSaleAt = dt;
-        row.employee = emp; // last seller
+        row.employee = emp;
       }
       map[shop] = row;
     }
@@ -380,7 +387,6 @@ class _SalesScreenState extends State<SalesScreen> {
   }
 
   Widget _buildTable(List<_ShopRow> rows, DateTime from, DateTime to) {
-    // cache for export
     _lastRows = rows;
     _lastFrom = from;
     _lastTo = to;
@@ -400,7 +406,7 @@ class _SalesScreenState extends State<SalesScreen> {
     );
 
     final app = context.read<AppDataProvider>();
-    final canEditDelete = (app.isAdmin == true) || (app.isManager == true); // keep employees blocked
+    final canEditDelete = (app.isAdmin == true) || (app.isManager == true);
 
     return Scrollbar(
       child: SingleChildScrollView(
@@ -423,11 +429,9 @@ class _SalesScreenState extends State<SalesScreen> {
                   DataColumn(label: Text('Actions')),
                 ],
                 rows: rows.map((r) {
-                  // has any sale?
                   final hasSale =
                       (r.total > 0) || (r.cash > 0) || (r.card > 0) || (r.other > 0);
 
-                  // blanks when no sale yet
                   String moneyOrBlank(num v) => hasSale ? _fmtMoney(v) : '';
                   final employeeText =
                       hasSale && (r.employee?.isNotEmpty ?? false) ? r.employee! : '';
@@ -452,7 +456,6 @@ class _SalesScreenState extends State<SalesScreen> {
                       DataCell(Text(moneyOrBlank(r.card), style: textStyle)),
                       DataCell(Text(moneyOrBlank(r.other), style: textStyle)),
 
-                      // Actions: View / Edit latest / Delete latest (only Admin/Manager)
                       DataCell(
                         canEditDelete
                             ? PopupMenuButton<String>(
@@ -460,11 +463,16 @@ class _SalesScreenState extends State<SalesScreen> {
                                   if (v == 'view') _openShopSalesDetail(r.shop, from, to);
                                   if (v == 'edit_latest') _editLatestSaleForShop(r.shop, from, to);
                                   if (v == 'delete_latest') _deleteLatestSaleForShop(r.shop, from, to);
+                                  if (v == 'compare_period') _compareWithTransactions(r.shop, from, to);
                                 },
                                 itemBuilder: (ctx) => const [
                                   PopupMenuItem(value: 'view', child: Text('View sales')),
                                   PopupMenuItem(value: 'edit_latest', child: Text('Edit latest')),
                                   PopupMenuItem(value: 'delete_latest', child: Text('Delete latest')),
+                                  PopupMenuItem(
+                                    value: 'compare_period',
+    child: Text('Compare with Transactions (Period)'),
+                                  ),
                                 ],
                                 child: const Icon(Icons.more_horiz),
                               )
@@ -485,7 +493,7 @@ class _SalesScreenState extends State<SalesScreen> {
     );
   }
 
-  // --------------------- PER-SHOP DETAIL (VIEW / EDIT / DELETE) ---------------------
+  // --------------------- PER-SHOP DETAIL ---------------------
 
   Future<void> _openShopSalesDetail(String shop, DateTime from, DateTime to) async {
     final app = context.read<AppDataProvider>();
@@ -570,7 +578,7 @@ class _SalesScreenState extends State<SalesScreen> {
 
                 return Card(
                   child: ListTile(
-                    title: Text('₨ $total',
+                    title: Text('Rs $total',
                         style: const TextStyle(fontWeight: FontWeight.w600)),
                     subtitle: Text('By: $emp  •  $when'),
                     onTap: canEditDelete ? () => _editSale(s) : null,
@@ -622,9 +630,97 @@ class _SalesScreenState extends State<SalesScreen> {
     }
   }
 
+  // 🔹 NEW: fetch only manual (employee/admin) sale — exclude transactions_close_day
+  Future<Map<String, dynamic>?> _fetchEmployeeManualSaleForShop(
+    String shop, DateTime from, DateTime to,
+  ) async {
+    final app = context.read<AppDataProvider>();
+    try {
+      final snap = await app
+          .buildSalesQuery(from: from, to: to, shop: shop)
+          .get();
+
+      Map<String, dynamic> mapDoc(QueryDocumentSnapshot<Map<String, dynamic>> d) {
+        final m = d.data();
+        DateTime created;
+        final raw = m['createdAt'];
+        if (raw is Timestamp) {
+          created = raw.toDate();
+        } else if (raw is DateTime) {
+          created = raw;
+        } else if (raw is String) {
+          created = DateTime.tryParse(raw) ?? DateTime.now();
+        } else {
+          created = DateTime.now();
+        }
+        double toD(v) =>
+            v is num ? v.toDouble() : double.tryParse('${v ?? ""}') ?? 0.0;
+
+        return {
+          'id': d.id,
+          'shop': (m['shop'] ?? '').toString(),
+          'employee': (m['employee'] ?? m['addedBy'] ?? '').toString(),
+          'cash': toD(m['cash']),
+          'card': toD(m['card']),
+          'other': toD(m['other']),
+          'total': toD(m['total']),
+          'createdAt': created,
+          'source': (m['source'] ?? '').toString(),
+        };
+      }
+
+      final items = snap.docs
+          .map(mapDoc)
+          .where((m) {
+            final src = (m['source'] ?? '').toString();
+            return src != 'transactions_close_day';
+          })
+          .toList()
+        ..sort((a, b) =>
+            (b['createdAt'] as DateTime).compareTo(a['createdAt'] as DateTime));
+
+      return items.isEmpty ? null : items.first;
+    } on FirebaseException catch (e) {
+      if (e.code == 'failed-precondition') {
+        final fs = await app.buildSalesQueryLoose(shop: shop).get();
+        final items = fs.docs
+            .map((d) {
+              final m = d.data();
+              final created = (m['createdAt'] is Timestamp)
+                  ? (m['createdAt'] as Timestamp).toDate()
+                  : DateTime.now();
+              double toD(v) =>
+                  v is num ? v.toDouble() : double.tryParse('${v ?? ""}') ?? 0.0;
+              return {
+                'id': d.id,
+                'shop': (m['shop'] ?? '').toString(),
+                'employee': (m['employee'] ?? m['addedBy'] ?? '').toString(),
+                'cash': toD(m['cash']),
+                'card': toD(m['card']),
+                'other': toD(m['other']),
+                'total': toD(m['total']),
+                'createdAt': created,
+                'source': (m['source'] ?? '').toString(),
+              };
+            })
+            .where((m) {
+              final dt = m['createdAt'] as DateTime;
+              final src = (m['source'] ?? '').toString();
+              return !dt.isBefore(from) && dt.isBefore(to) &&
+                     src != 'transactions_close_day';
+            })
+            .toList()
+          ..sort((a, b) =>
+              (b['createdAt'] as DateTime).compareTo(a['createdAt'] as DateTime));
+        return items.isEmpty ? null : items.first;
+      }
+      rethrow;
+    }
+  }
+
   Future<void> _editLatestSaleForShop(String shop, DateTime from, DateTime to) async {
-    final navigator = Navigator.of(context); // pre-capture
-    final messenger = ScaffoldMessenger.of(context); // pre-capture
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
 
     final s = await _fetchLatestSaleForShop(shop, from, to);
     if (s == null) {
@@ -633,15 +729,15 @@ class _SalesScreenState extends State<SalesScreen> {
       );
       return;
     }
-    if (!mounted) return; // guard after async gap
+    if (!mounted) return;
     await navigator.push(
       MaterialPageRoute(builder: (_) => AddSaleScreen(existingSale: s)),
     );
   }
 
   Future<void> _deleteLatestSaleForShop(String shop, DateTime from, DateTime to) async {
-    final app = context.read<AppDataProvider>();           // pre-capture
-    final messenger = ScaffoldMessenger.of(context);       // pre-capture
+    final app = context.read<AppDataProvider>();
+    final messenger = ScaffoldMessenger.of(context);
 
     final s = await _fetchLatestSaleForShop(shop, from, to);
     if (s == null) {
@@ -651,12 +747,12 @@ class _SalesScreenState extends State<SalesScreen> {
       return;
     }
 
-    if (!mounted) return; // guard before using context in showDialog
+    if (!mounted) return;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete latest sale?'),
-        content: Text('Shop: $shop\nAmount: ₨ ${( (s['total'] as num?)?.toDouble() ?? 0).toStringAsFixed(0)}'),
+        content: Text('Shop: $shop\nAmount: Rs ${((s['total'] as num?)?.toDouble() ?? 0).toStringAsFixed(0)}'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
@@ -671,15 +767,15 @@ class _SalesScreenState extends State<SalesScreen> {
   }
 
   Future<void> _editSale(Map<String, dynamic> sale) async {
-    final navigator = Navigator.of(context); // pre-capture
+    final navigator = Navigator.of(context);
     await navigator.push(
       MaterialPageRoute(builder: (_) => AddSaleScreen(existingSale: sale)),
     );
   }
 
   Future<void> _confirmDelete(String id) async {
-    final app = context.read<AppDataProvider>(); // pre-capture
-    final messenger = ScaffoldMessenger.of(context); // pre-capture
+    final app = context.read<AppDataProvider>();
+    final messenger = ScaffoldMessenger.of(context);
 
     final ok = await showDialog<bool>(
       context: context,
@@ -699,6 +795,103 @@ class _SalesScreenState extends State<SalesScreen> {
       );
     }
   }
+
+  // --------------------- COMPARE (TODAY) ---------------------
+
+  Future<void> _compareWithTransactions(String shop, DateTime from, DateTime to) async {
+  final app = context.read<AppDataProvider>();
+  // normalize to midnight boundaries
+  final start = DateTime(from.year, from.month, from.day);
+  final endExcl = DateTime(to.year, to.month, to.day); // exclusive already
+  final isSingleDay = endExcl.difference(start).inDays == 1;
+
+  // ---------- Transactions total (day-by-day aggregate if needed) ----------
+  double txCash = 0, txCard = 0, txOther = 0, txTotal = 0;
+
+  Future<void> addDayTotals(DateTime day) async {
+    final t = await app.computeDailyTransactionTotals(shop, day); // {cash, card, other, total}
+    txCash += (t['cash'] ?? 0).toDouble();
+    txCard += (t['card'] ?? 0).toDouble();
+    txOther += (t['other'] ?? 0).toDouble();
+    txTotal += (t['total'] ?? 0).toDouble();
+  }
+
+  if (isSingleDay) {
+    await addDayTotals(start);
+  } else {
+    for (int i = 0; i < endExcl.difference(start).inDays; i++) {
+      await addDayTotals(start.add(Duration(days: i)));
+    }
+  }
+
+  // ---------- Sales total (employee/admin posted) within the same period ----------
+  final salesSnap = await app
+      .buildSalesQuery(from: start, to: endExcl, shop: shop)
+      .get();
+
+  double empTotal = 0;
+  for (final d in salesSnap.docs) {
+    final m = app.mapSaleDoc(d);
+    empTotal += (m['total'] as num?)?.toDouble() ?? 0.0;
+  }
+
+  final diff = txTotal - empTotal;
+  final titlePeriod = isSingleDay
+      ? DateFormat('dd MMM, yyyy').format(start)
+      : '${DateFormat('dd MMM, yyyy').format(start)} – ${DateFormat('dd MMM, yyyy').format(endExcl.subtract(const Duration(days: 1)))}';
+
+  if (!mounted) return;
+  showDialog(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text('Compare: $shop ($titlePeriod)'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _kv('Transactions Total', 'Rs ${txTotal.toStringAsFixed(0)}'),
+          _kv('Employee Daily Sale', 'Rs ${empTotal.toStringAsFixed(0)}'),
+          const SizedBox(height: 8),
+          const Divider(),
+          _kv('Difference', 'Rs ${diff.abs().toStringAsFixed(0)}'
+              '${diff == 0 ? '' : (diff > 0 ? '  (Tx > Sale)' : '  (Sale > Tx)')}'),
+          const SizedBox(height: 8),
+          const Text('Breakdown (Transactions):'),
+          const SizedBox(height: 4),
+          _kv('• Cash',  'Rs ${txCash.toStringAsFixed(0)}'),
+          _kv('• Card',  'Rs ${txCard.toStringAsFixed(0)}'),
+          _kv('• Other', 'Rs ${txOther.toStringAsFixed(0)}'),
+        ],
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+        if (isSingleDay && empTotal == 0 && txTotal > 0) // helpful shortcut
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(ctx);
+              final err = await app.postDailySaleFromTransactions(
+                shopName: shop,
+                day: start,
+              );
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text(err ?? 'Daily Sale created from transactions')),
+              );
+            },
+            child: const Text('Post as Daily Sale'),
+          ),
+      ],
+    ),
+  );
+}
+
+  Widget _kv(String k, String v) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(children: [
+          Expanded(child: Text(k)),
+          Text(v),
+        ]),
+      );
 
   // --------------------- HELPERS ---------------------
 
@@ -728,7 +921,6 @@ class _SalesScreenState extends State<SalesScreen> {
       return (s, e);
     }
 
-    // Daily + Specific Date
     final s = DateTime(_anchorDate.year, _anchorDate.month, _anchorDate.day);
     return (s, s.add(const Duration(days: 1)));
   }
@@ -748,13 +940,13 @@ class _SalesScreenState extends State<SalesScreen> {
 
   String _fmtMoney(dynamic v) {
     final d = v is num ? v.toDouble() : double.tryParse('${v ?? ''}') ?? 0.0;
-    return '₨ ${d.toStringAsFixed(0)}';
+    return 'Rs ${d.toStringAsFixed(0)}';
   }
 
   // --------------------- EXPORTS ---------------------
 
   Future<void> _exportCsv() async {
-    final messenger = ScaffoldMessenger.of(context); // pre-capture
+    final messenger = ScaffoldMessenger.of(context);
     if (_lastRows.isEmpty || _lastFrom == null || _lastTo == null) {
       messenger.showSnackBar(
         const SnackBar(content: Text('Nothing to export')),
@@ -794,7 +986,7 @@ class _SalesScreenState extends State<SalesScreen> {
   }
 
   Future<void> _exportPdf() async {
-    final messenger = ScaffoldMessenger.of(context); // pre-capture
+    final messenger = ScaffoldMessenger.of(context);
     if (_lastRows.isEmpty || _lastFrom == null || _lastTo == null) {
       messenger.showSnackBar(
         const SnackBar(content: Text('Nothing to export')),
@@ -842,7 +1034,7 @@ class _SalesScreenState extends State<SalesScreen> {
   }
 }
 
-// Row model for aggregation
+// Row model
 class _ShopRow {
   _ShopRow({required this.shop});
 
@@ -920,7 +1112,7 @@ class _DailySaleFromTransactionsSheetState
 
   @override
   Widget build(BuildContext context) {
-    const currency = '₨';
+    const currency = 'Rs';
     final app = context.watch<AppDataProvider>();
     final shops = app.shops
         .where((s) => (s['isDeleted'] ?? false) != true)
@@ -1018,7 +1210,7 @@ class _DailySaleFromTransactionsSheetState
           Text(label),
           const Spacer(),
           Text(
-            '$currency${value.toStringAsFixed(2)}',
+            '$currency ${value.toStringAsFixed(2)}',
             style: TextStyle(fontWeight: bold ? FontWeight.w700 : FontWeight.w400),
           ),
         ],

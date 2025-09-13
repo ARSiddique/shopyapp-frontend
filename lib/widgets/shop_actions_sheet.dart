@@ -1,12 +1,15 @@
+// lib/widgets/shop_actions_sheet.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_data_provider.dart';
-import '../screens/add_order_screen.dart';
 import '../screens/orders_screen.dart';
 import '../screens/sales_screen.dart';
+import '../screens/wholesalers_list_screen.dart';
+import '../screens/add_order_screen.dart';
 
 Future<void> showShopActions(BuildContext context, String shopName) async {
   final app = context.read<AppDataProvider>();
+  final role = (app.loggedInUser?['role'] ?? '').toString().toLowerCase();
 
   await showModalBottomSheet(
     context: context,
@@ -20,51 +23,46 @@ Future<void> showShopActions(BuildContext context, String shopName) async {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(height: 4, width: 40, decoration: BoxDecoration(color: Colors.black12, borderRadius: BorderRadius.circular(4))),
+              Container(height: 4, width: 40,
+                decoration: BoxDecoration(color: Colors.black12, borderRadius: BorderRadius.circular(4))),
               const SizedBox(height: 12),
               Text(shopName, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
               const SizedBox(height: 12),
               Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: [
+                spacing: 10, runSpacing: 10, children: [
+
+                  // Add Order → pick wholesaler → prefilled AddOrderScreen
                   _ActionChip(
-                    icon: Icons.add_shopping_cart,
-                    label: 'Add Order',
-                    onTap: () {
+                    icon: Icons.add_shopping_cart, label: 'Add Order',
+                    onTap: () async {
                       Navigator.pop(context);
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => const AddOrderScreen()));
+                      await _startAddOrderFlow(context, shopName);
                     },
                   ),
+
                   _ActionChip(
-                    icon: Icons.shopping_bag,
-                    label: 'View Orders',
+                    icon: Icons.shopping_bag, label: 'View Orders',
                     onTap: () {
                       Navigator.pop(context);
                       Navigator.push(context, MaterialPageRoute(builder: (_) => const OrdersScreen()));
                     },
                   ),
+
+                  // Admin/Manager only: Add Wholesaler inline (no new screen)
+                  if (role == 'admin' || role == 'manager')
+                    _ActionChip(
+                      icon: Icons.person_add_alt_1, label: 'Add Wholesaler',
+                      onTap: () async {
+                        Navigator.pop(context);
+                        await _showAddWholesalerDialog(context);
+                      },
+                    ),
+
                   _ActionChip(
-                    icon: Icons.trending_up,
-                    label: 'Sales',
+                    icon: Icons.trending_up, label: 'Sales',
                     onTap: () {
                       Navigator.pop(context);
                       Navigator.push(context, MaterialPageRoute(builder: (_) => const SalesScreen()));
-                    },
-                  ),
-                  _ActionChip(
-                    icon: Icons.lock_clock,
-                    label: 'Close Day',
-                    onTap: () async {
-                      Navigator.pop(context);
-                      final err = await app.postDailySaleFromTransactions(
-                        shopName: shopName,
-                        day: DateTime.now(),
-                      );
-                      // ignore: use_build_context_synchronously
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text(err == null ? 'Day closed for $shopName' : 'Failed: $err')),
-                      );
                     },
                   ),
                 ],
@@ -94,4 +92,75 @@ class _ActionChip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
     );
   }
+}
+
+// ---- helpers inside same file (reuse) ----
+Future<void> _startAddOrderFlow(BuildContext context, String shopName) async {
+  // 1) pick wholesaler
+  final selected = await Navigator.push<String>(
+    context,
+    MaterialPageRoute(builder: (_) => const WholesalersListScreen(selectMode: true)),
+  );
+  if (selected == null || selected.trim().isEmpty) return;
+
+  // 2) open AddOrder with prefilled params
+  await Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => AddOrderScreen(
+        shopName: shopName,
+        wholesalerName: selected.trim(),
+      ),
+    ),
+  );
+}
+
+Future<void> _showAddWholesalerDialog(BuildContext context) async {
+  final app = context.read<AppDataProvider>();
+  final formKey = GlobalKey<FormState>();
+  String name = '', phone = '', address = '';
+
+  await showDialog(
+    context: context,
+    builder: (_) => AlertDialog(
+      title: const Text('Add Wholesaler'),
+      content: Form(
+        key: formKey,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextFormField(
+            decoration: const InputDecoration(labelText: 'Name'),
+            onChanged: (v) => name = v.trim(),
+            validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            decoration: const InputDecoration(labelText: 'Phone'),
+            onChanged: (v) => phone = v.trim(),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            decoration: const InputDecoration(labelText: 'Address'),
+            onChanged: (v) => address = v.trim(),
+          ),
+        ]),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(
+          onPressed: () async {
+            if (!formKey.currentState!.validate()) return;
+            final err = await app.addOrUpdateWholesaler(
+              name: name, phone: phone, address: address,
+            );
+            if (!context.mounted) return;
+            Navigator.pop(context); // close dialog once
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(err == null ? 'Wholesaler added' : 'Failed: $err')),
+            );
+          },
+          child: const Text('Save'),
+        ),
+      ],
+    ),
+  );
 }

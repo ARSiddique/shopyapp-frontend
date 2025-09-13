@@ -13,6 +13,7 @@ import '../screens/add_employee_and_access_screen.dart';
 // import '../screens/admin_orders_screen.dart';
 import '../screens/all_shops_screen.dart';
 import '../screens/orders_screen.dart';
+import '../utils/order_flow.dart';
 
 class HomeDashboard extends StatefulWidget {
   const HomeDashboard({super.key});
@@ -123,14 +124,7 @@ class _HomeDashboardState extends State<HomeDashboard> {
                   QuickActionButton(
                     icon: Icons.add_shopping_cart,
                     label: "Add Order",
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const AddOrderScreen(),
-                        ),
-                      );
-                    },
+                    onTap: () => startAddOrderFlow(context),
                   ),
                   if (role != 'employee')
                     QuickActionButton(
