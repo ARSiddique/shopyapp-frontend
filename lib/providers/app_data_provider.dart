@@ -7,43 +7,154 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:typed_data';
 import 'package:firebase_storage/firebase_storage.dart';
 
+/// ===== Goal-4 models (TOP-LEVEL; keep outside AppDataProvider) =====
 
+class DateRange {
+  final DateTime from; // inclusive
+  final DateTime to;   // exclusive
+  const DateRange(this.from, this.to);
+}
+
+class ShopSummary {
+  final String shopName;
+
+  // Sales
+  final double cash;
+  final double card;
+  final double other;
+  double get salesTotal => cash + card + other;
+  double get posCash => cash + card + other; // POS = cash + card + other
+
+  // Wholesaler
+  final double wholesalerInvoiceTotal;
+  final double wholesalerPaidTotal;
+  double get wholesalerBalance => wholesalerInvoiceTotal - wholesalerPaidTotal;
+
+  // Expenses
+  final double employeeExpenseTotal;
+  final double otherExpenseTotal;
+  double get totalExpense =>
+      employeeExpenseTotal + otherExpenseTotal + wholesalerInvoiceTotal;
+
+  // Net
+  double get net => salesTotal - totalExpense;
+
+  // Optional: orders snapshot for day
+  final List<Map<String, dynamic>> orders;
+
+  ShopSummary({
+    required this.shopName,
+    required this.cash,
+    required this.card,
+    required this.other,
+    required this.wholesalerInvoiceTotal,
+    required this.wholesalerPaidTotal,
+    required this.employeeExpenseTotal,
+    required this.otherExpenseTotal,
+    required this.orders,
+  });
+}
+
+class AllShopsSummary {
+  final DateRange range;
+  final String filterShopName;            // 'All' or specific
+  final Map<String, ShopSummary> perShop; // key = shopName
+
+  AllShopsSummary({
+    required this.range,
+    required this.filterShopName,
+    required this.perShop,
+  });
+
+  double get grandSales =>
+      perShop.values.fold(0.0, (s, e) => s + e.salesTotal);
+  double get grandCash =>
+      perShop.values.fold(0.0, (s, e) => s + e.cash);
+  double get grandCard =>
+      perShop.values.fold(0.0, (s, e) => s + e.card);
+  double get grandOther =>
+      perShop.values.fold(0.0, (s, e) => s + e.other);
+
+  double get grandWholesalerInvoices =>
+      perShop.values.fold(0.0, (s, e) => s + e.wholesalerInvoiceTotal);
+  double get grandWholesalerPaid =>
+      perShop.values.fold(0.0, (s, e) => s + e.wholesalerPaidTotal);
+  double get grandWholesalerBalance =>
+      grandWholesalerInvoices - grandWholesalerPaid;
+
+  double get grandEmployeeExpense =>
+      perShop.values.fold(0.0, (s, e) => s + e.employeeExpenseTotal);
+  double get grandOtherExpense =>
+      perShop.values.fold(0.0, (s, e) => s + e.otherExpenseTotal);
+  double get grandTotalExpense =>
+      perShop.values.fold(0.0, (s, e) => s + e.totalExpense);
+
+  double get grandNet => grandSales - grandTotalExpense;
+}
+
+/// Top-level helper to compute range from a view mode.
+DateRange rangeForView(String viewMode, DateTime anchor) {
+  final a = DateTime(anchor.year, anchor.month, anchor.day);
+  switch (viewMode) {
+    case 'Daily':
+      return DateRange(a, a.add(const Duration(days: 1)));
+    case 'Weekly': {
+      final start = a.subtract(Duration(days: a.weekday - 1)); // Monday
+      return DateRange(start, start.add(const Duration(days: 7)));
+    }
+    case 'Monthly': {
+      final start = DateTime(a.year, a.month, 1);
+      return DateRange(start, DateTime(a.year, a.month + 1, 1));
+    }
+    case 'Yearly': {
+      final start = DateTime(a.year, 1, 1);
+      return DateRange(start, DateTime(a.year + 1, 1, 1));
+    }
+    default:
+      return DateRange(a, a.add(const Duration(days: 1)));
+  }
+}
+
+/// ====================================================================
+///                          AppDataProvider
+/// ====================================================================
 class AppDataProvider extends ChangeNotifier {
   AppDataProvider() {
     FirebaseFirestore.instance.settings =
         const Settings(persistenceEnabled: true);
   }
-  DocumentSnapshot? _lastOrderDoc;
-bool _hasMoreOrders = true;
-bool get hasMoreOrders => _hasMoreOrders;
 
   final FirebaseFirestore firestore = FirebaseFirestore.instance;
 
+  DocumentSnapshot? _lastOrderDoc;
+  bool _hasMoreOrders = true;
+  bool get hasMoreOrders => _hasMoreOrders;
+
   Map<String, dynamic>? _loggedInUser;
+  Map<String, dynamic>? get loggedInUser => _loggedInUser;
+
   final List<Map<String, dynamic>> _orders = [];
   final List<Map<String, dynamic>> _sales = [];
   final List<Map<String, dynamic>> _editRequests = [];
 
-  List<Map<String, dynamic>> shops = [];
-  List<Map<String, dynamic>> employees = []; // from 'employees' collection
-  List<Map<String, dynamic>> usersList = []; // from 'users' collection
-
   List<Map<String, dynamic>> get orders => _orders;
-  Map<String, dynamic>? get loggedInUser => _loggedInUser;
 
   final List<Map<String, dynamic>> _expenses = [];
-final List<Map<String, dynamic>> _payments = [];
-List<Map<String, dynamic>> get expenses => _expenses;
-List<Map<String, dynamic>> get payments => _payments;
+  final List<Map<String, dynamic>> _payments = [];
+  List<Map<String, dynamic>> get expenses => _expenses;
+  List<Map<String, dynamic>> get payments => _payments;
 
-  // ✅ Role helpers (use in UI guards)
+  List<Map<String, dynamic>> shops = [];
+  List<Map<String, dynamic>> employees = [];
+  List<Map<String, dynamic>> usersList = [];
+
+  // Role helpers
   bool get isAdmin =>
       ((loggedInUser?['role'] ?? '') as String).toLowerCase() == 'admin';
   bool get isManager =>
       ((loggedInUser?['role'] ?? '') as String).toLowerCase() == 'manager';
   bool get isEmployee =>
       ((loggedInUser?['role'] ?? '') as String).toLowerCase() == 'employee';
-
 
   // --------- Session & Login ---------
   void loginUser(Map<String, dynamic> user) {
@@ -64,338 +175,555 @@ List<Map<String, dynamic>> get payments => _payments;
     notifyListeners();
   }
 
+  String dayKeyOf(DateTime d) =>
+      DateFormat('yyyy-MM-dd').format(DateTime(d.year, d.month, d.day));
 
-String dayKeyOf(DateTime d) =>
-    DateFormat('yyyy-MM-dd').format(DateTime(d.year, d.month, d.day));
+  DateTime noonOf(DateTime d) => DateTime(d.year, d.month, d.day, 12, 0, 0);
 
-DateTime noonOf(DateTime d) => DateTime(d.year, d.month, d.day, 12, 0, 0);
+  double _round2(num v) => (v.toDouble() * 100).roundToDouble() / 100.0;
 
-double _round2(num v) => (v.toDouble() * 100).roundToDouble() / 100.0;
-
-void resetOrdersPaging() {
-  _orders.clear();
-  _lastOrderDoc = null;
-  _hasMoreOrders = true;
-  notifyListeners();
-}
-
-Future<void> addTransactionBatch(List<Map<String, dynamic>> entries) async {
-  final batch = firestore.batch();
-  final col = firestore.collection('transactions');
-  for (final e in entries) {
-    batch.set(col.doc(), e);
+  void resetOrdersPaging() {
+    _orders.clear();
+    _lastOrderDoc = null;
+    _hasMoreOrders = true;
+    notifyListeners();
   }
-  await batch.commit();
-}
 
-
-Future<String?> addOrUpdateWholesaler({
-  required String name,
-  String? phone,
-  String? address,
-}) async {
-  try {
-    final nameTrim = name.trim();
-    if (nameTrim.isEmpty) return 'Name required';
-
-    final nameLower = nameTrim.toLowerCase();
-
-    // Check duplicate by nameLower
-    final dup = await firestore
-        .collection('wholesalers')
-        .where('nameLower', isEqualTo: nameLower)
-        .limit(1)
-        .get();
-
-    if (dup.docs.isNotEmpty) {
-      // update existing
-      await dup.docs.first.reference.update({
-        'name': nameTrim,
-        'nameLower': nameLower,
-        'phone': (phone ?? '').trim(),
-        'address': (address ?? '').trim(),
-        'isActive': true,
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
-    } else {
-      // add new
-      await firestore.collection('wholesalers').add({
-        'name': nameTrim,
-        'nameLower': nameLower,
-        'phone': (phone ?? '').trim(),
-        'address': (address ?? '').trim(),
-        'isActive': true,
-        'createdAt': FieldValue.serverTimestamp(),
-        'createdBy': _loggedInUser?['name'] ?? _loggedInUser?['email'],
-      });
+  Future<void> addTransactionBatch(List<Map<String, dynamic>> entries) async {
+    final batch = firestore.batch();
+    final col = firestore.collection('transactions');
+    for (final e in entries) {
+      batch.set(col.doc(), e);
     }
-
-    await fetchWholesalers();
-    return null;
-  } catch (e) {
-    return e.toString();
-  }
-}
-
-
-/// Per-day totals (refund negative).
-Future<Map<String, double>> computeDailyTransactionTotals(
-  String shopName,
-  DateTime day,
-) async {
-  final key = dayKeyOf(day);
-
-  // primary: dayKey + shopName
-  final qs = await firestore
-      .collection('transactions')
-      .where('shopName', isEqualTo: shopName)
-      .where('dayKey', isEqualTo: key)
-      .get();
-
-  double cash = 0, card = 0, other = 0;
-
-  Future<void> addDoc(Map<String, dynamic> d) async {
-    final amt = (d['amount'] as num?)?.toDouble() ?? 0.0;
-    final refund = (d['isRefund'] == true) || (d['refund'] == true);
-    final signed = refund ? -amt : amt;
-    final m = (d['method'] ?? '').toString();
-    if (m == 'cash')      cash += signed;
-    else if (m == 'card') card += signed;
-    else                  other += signed;
+    await batch.commit();
   }
 
-  if (qs.docs.isEmpty) {
-    // fallback 1: createdAt window + shopName
-    final start = DateTime(day.year, day.month, day.day);
-    final end   = start.add(const Duration(days: 1));
-    final fb1 = await firestore
+  Future<String?> addOrUpdateWholesaler({
+    required String name,
+    String? phone,
+    String? address,
+  }) async {
+    try {
+      final nameTrim = name.trim();
+      if (nameTrim.isEmpty) return 'Name required';
+
+      final nameLower = nameTrim.toLowerCase();
+
+      final dup = await firestore
+          .collection('wholesalers')
+          .where('nameLower', isEqualTo: nameLower)
+          .limit(1)
+          .get();
+
+      if (dup.docs.isNotEmpty) {
+        await dup.docs.first.reference.update({
+          'name': nameTrim,
+          'nameLower': nameLower,
+          'phone': (phone ?? '').trim(),
+          'address': (address ?? '').trim(),
+          'isActive': true,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      } else {
+        await firestore.collection('wholesalers').add({
+          'name': nameTrim,
+          'nameLower': nameLower,
+          'phone': (phone ?? '').trim(),
+          'address': (address ?? '').trim(),
+          'isActive': true,
+          'createdAt': FieldValue.serverTimestamp(),
+          'createdBy': _loggedInUser?['name'] ?? _loggedInUser?['email'],
+        });
+      }
+
+      await fetchWholesalers();
+      return null;
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  /// Per-day totals (refund negative).
+  Future<Map<String, double>> computeDailyTransactionTotals(
+    String shopName,
+    DateTime day,
+  ) async {
+    final key = dayKeyOf(day);
+
+    final qs = await firestore
         .collection('transactions')
         .where('shopName', isEqualTo: shopName)
-        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
-        .where('createdAt', isLessThan: Timestamp.fromDate(end))
+        .where('dayKey', isEqualTo: key)
         .get();
 
-    if (fb1.docs.isEmpty) {
-      // fallback 2: createdAt window + shop (older docs)
-      final fb2 = await firestore
+    double cash = 0, card = 0, other = 0;
+
+    Future<void> addDoc(Map<String, dynamic> d) async {
+      final amt = (d['amount'] as num?)?.toDouble() ?? 0.0;
+      final refund = (d['isRefund'] == true) || (d['refund'] == true);
+      final signed = refund ? -amt : amt;
+      final m = (d['method'] ?? '').toString();
+      if (m == 'cash') {
+        cash += signed;
+      } else if (m == 'card') {
+        card += signed;
+      } else {
+        other += signed;
+      }
+    }
+
+    if (qs.docs.isEmpty) {
+      final start = DateTime(day.year, day.month, day.day);
+      final end = start.add(const Duration(days: 1));
+
+      final fb1 = await firestore
           .collection('transactions')
-          .where('shop', isEqualTo: shopName)
+          .where('shopName', isEqualTo: shopName)
           .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
           .where('createdAt', isLessThan: Timestamp.fromDate(end))
           .get();
-      for (final d in fb2.docs) {
-        await addDoc(d.data());
+
+      if (fb1.docs.isEmpty) {
+        final fb2 = await firestore
+            .collection('transactions')
+            .where('shop', isEqualTo: shopName)
+            .where('createdAt',
+                isGreaterThanOrEqualTo: Timestamp.fromDate(start))
+            .where('createdAt', isLessThan: Timestamp.fromDate(end))
+            .get();
+        for (final d in fb2.docs) {
+          await addDoc(d.data());
+        }
+      } else {
+        for (final d in fb1.docs) {
+          await addDoc(d.data());
+        }
       }
     } else {
-      for (final d in fb1.docs) {
+      for (final d in qs.docs) {
         await addDoc(d.data());
       }
     }
-  } else {
-    for (final d in qs.docs) {
-      await addDoc(d.data());
-    }
+
+    final total = cash + card + other;
+    return {
+      'cash': _round2(cash),
+      'card': _round2(card),
+      'other': _round2(other),
+      'total': _round2(total),
+    };
   }
 
-  final total = cash + card + other;
-  return {
-    'cash' : _round2(cash),
-    'card' : _round2(card),
-    'other': _round2(other),
-    'total': _round2(total),
-  };
-}
+  /// Close Day → unique sale doc in `sales` (from transactions).
+  /// Returns null on success; error string on conflict/failure.
+  Future<String?> postDailySaleFromTransactions({
+    required String shopName,
+    required DateTime day,
+  }) async {
+    try {
+      final user = loggedInUser ?? {};
+      final creatorName = (user['name'] ?? user['email'] ?? 'system').toString();
+      final creatorUid = (user['uid'] ?? '').toString();
 
-/// Close Day → unique sale doc in `sales` (from transactions).
-/// Returns null on success; error string on conflict/failure.
-Future<String?> postDailySaleFromTransactions({
-  required String shopName,
-  required DateTime day,
-}) async {
-  try {
-    final user = loggedInUser ?? {};
-    final creatorName = (user['name'] ?? user['email'] ?? 'system').toString();
-    final creatorUid = (user['uid'] ?? '').toString();
+      final totals = await computeDailyTransactionTotals(shopName, day);
+      final dayKey = dayKeyOf(day);
+      final createdAt = Timestamp.fromDate(noonOf(day));
 
-    final totals = await computeDailyTransactionTotals(shopName, day);
-    final dayKey = dayKeyOf(day);
-    final createdAt = Timestamp.fromDate(noonOf(day));
+      final docId = 'sales_${shopName}_$dayKey';
+      final salesRef = firestore.collection('sales').doc(docId);
 
-    // deterministic doc id to enforce uniqueness
-    final docId = 'sales_${shopName}_$dayKey';
-    final salesRef = firestore.collection('sales').doc(docId);
-
-    await firestore.runTransaction((tx) async {
-      final snap = await tx.get(salesRef);
-      if (snap.exists) {
-        throw 'Sale already exists for $shopName on $dayKey';
-      }
-      tx.set(salesRef, {
-        'id': docId,
-        'shopName': shopName,
-        'shop': shopName, // compatibility
-        'cash': totals['cash'],
-        'card': totals['card'],
-        'other': totals['other'],
-        'total': totals['total'],
-        'createdAt': createdAt,
-        'dayKey': dayKey,
-        'source': 'transactions_close_day',
-        'createdByUid': creatorUid,
-        'createdByName': creatorName,
+      await firestore.runTransaction((tx) async {
+        final snap = await tx.get(salesRef);
+        if (snap.exists) {
+          throw 'Sale already exists for $shopName on $dayKey';
+        }
+        tx.set(salesRef, {
+          'id': docId,
+          'shopName': shopName,
+          'shop': shopName, // compatibility
+          'cash': totals['cash'],
+          'card': totals['card'],
+          'other': totals['other'],
+          'total': totals['total'],
+          'createdAt': createdAt,
+          'dayKey': dayKey,
+          'source': 'transactions_close_day',
+          'createdByUid': creatorUid,
+          'createdByName': creatorName,
+        });
       });
-    });
-    return null;
-  } catch (e) {
-    return e.toString();
-  }
-}
-
-Future<bool> isDayClosed(String shopName, DateTime day) async {
-  final key = dayKeyOf(day);
-  final qs = await firestore.collection('sales')
-      .where('shop', isEqualTo: shopName)
-      .where('dayKey', isEqualTo: key)
-      .limit(1)
-      .get();
-  return qs.docs.isNotEmpty;
-}
-
-
-Future<void> fetchOrdersPage({int pageSize = 20}) async {
-  try {
-    Query<Map<String, dynamic>> q = firestore
-        .collection('orders')
-        .orderBy('createdAt', descending: true)
-        .limit(pageSize);
-
-    if (_lastOrderDoc != null) {
-      q = q.startAfterDocument(_lastOrderDoc!);
+      return null;
+    } catch (e) {
+      return e.toString();
     }
+  }
 
-    final snap = await q.get();
+  Future<bool> isDayClosed(String shopName, DateTime day) async {
+    final key = dayKeyOf(day);
+    final qs = await firestore
+        .collection('sales')
+        .where('shop', isEqualTo: shopName)
+        .where('dayKey', isEqualTo: key)
+        .limit(1)
+        .get();
+    return qs.docs.isNotEmpty;
+  }
 
-    if (snap.docs.isNotEmpty) {
-      _lastOrderDoc = snap.docs.last;
+  Future<void> fetchOrdersPage({int pageSize = 20}) async {
+    try {
+      Query<Map<String, dynamic>> q = firestore
+          .collection('orders')
+          .orderBy('createdAt', descending: true)
+          .limit(pageSize);
 
-      _orders.addAll(snap.docs.map((d) {
-        final data = d.data();
-        final raw = data['createdAt'];
-        DateTime? createdAt;
-        if (raw is Timestamp) createdAt = raw.toDate();
-        else if (raw is DateTime) createdAt = raw;
-        else if (raw is String) createdAt = DateTime.tryParse(raw);
+      if (_lastOrderDoc != null) {
+        q = q.startAfterDocument(_lastOrderDoc!);
+      }
 
+      final snap = await q.get();
+
+      if (snap.docs.isNotEmpty) {
+        _lastOrderDoc = snap.docs.last;
+
+        _orders.addAll(snap.docs.map((d) {
+          final data = d.data();
+          final raw = data['createdAt'];
+          DateTime? createdAt;
+          if (raw is Timestamp) {
+            createdAt = raw.toDate();
+          } else if (raw is DateTime) {
+            createdAt = raw;
+          } else if (raw is String) {
+            createdAt = DateTime.tryParse(raw);
+          }
+
+          return {
+            'id': d.id,
+            ...data,
+            'createdAt': createdAt,
+          };
+        }));
+      }
+
+      if (snap.docs.length < pageSize) {
+        _hasMoreOrders = false;
+      }
+      notifyListeners();
+    } catch (e) {
+      debugPrint('fetchOrdersPage error: $e');
+    }
+  }
+
+  Future<void> addExpense({
+    required String shopName,
+    required double amount,
+    required String category, // Rent, Utility, Misc
+    String? note,
+  }) async {
+    final data = {
+      'shopName': shopName,
+      'amount': amount,
+      'category': category,
+      'note': note,
+      'createdAt': Timestamp.now(),
+      'createdBy': _loggedInUser?['name'] ?? _loggedInUser?['email'],
+    };
+    final doc = await firestore.collection('expenses').add(data);
+    _expenses.add({'id': doc.id, ...data, 'createdAt': DateTime.now()});
+    notifyListeners();
+  }
+
+  Future<void> addPayment({
+    required String shopName,
+    required double amount,
+    required String toWholesalerName,
+    String? note,
+  }) async {
+    final data = {
+      'shopName': shopName,
+      'amount': amount,
+      'toWholesalerName': toWholesalerName,
+      'note': note,
+      'createdAt': Timestamp.now(),
+      'createdBy': _loggedInUser?['name'] ?? _loggedInUser?['email'],
+    };
+    final doc = await firestore.collection('payments').add(data);
+    _payments.add({'id': doc.id, ...data, 'createdAt': DateTime.now()});
+    notifyListeners();
+  }
+
+  Future<void> fetchExpenses() async {
+    final snap = await firestore
+        .collection('expenses')
+        .orderBy('createdAt', descending: true)
+        .get();
+    _expenses
+      ..clear()
+      ..addAll(snap.docs.map((d) {
+        final m = d.data();
+        final ts = m['createdAt'];
         return {
           'id': d.id,
-          ...data,
-          'createdAt': createdAt,
+          ...m,
+          'createdAt': ts is Timestamp ? ts.toDate() : DateTime.now()
         };
       }));
-    }
-
-    if (snap.docs.length < pageSize) {
-      _hasMoreOrders = false;
-    }
     notifyListeners();
-  } catch (e) {
-    debugPrint('fetchOrdersPage error: $e');
   }
-}
 
-Future<void> addExpense({
+  Future<void> fetchPayments() async {
+    final snap = await firestore
+        .collection('payments')
+        .orderBy('createdAt', descending: true)
+        .get();
+    _payments
+      ..clear()
+      ..addAll(snap.docs.map((d) {
+        final m = d.data();
+        final ts = m['createdAt'];
+        return {
+          'id': d.id,
+          ...m,
+          'createdAt': ts is Timestamp ? ts.toDate() : DateTime.now()
+        };
+      }));
+    notifyListeners();
+  }
+
+  Future<void> requestOrderReturn(String id, {String? note}) async {
+    await firestore.collection('orders').doc(id).update({
+      'isReturnRequested': true,
+      'returnNote': note ?? '',
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    await fetchOrders();
+  }
+Future<double> getWholesalerShopBalance({
   required String shopName,
-  required double amount,
-  required String category, // Rent, Utility, Misc
-  String? note,
+  required String wholesalerName,
 }) async {
-  final data = {
-    'shopName': shopName,
-    'amount': amount,
-    'category': category,
-    'note': note,
-    'createdAt': Timestamp.now(),
-    'createdBy': _loggedInUser?['name'] ?? _loggedInUser?['email'],
-  };
-  final doc = await firestore.collection('expenses').add(data);
-  _expenses.add({'id': doc.id, ...data, 'createdAt': DateTime.now()});
-  notifyListeners();
-}
-
-Future<void> addPayment({
-  required String shopName,
-  required double amount,
-  required String toWholesalerName,
-  String? note,
-}) async {
-  final data = {
-    'shopName': shopName,
-    'amount': amount,
-    'toWholesalerName': toWholesalerName,
-    'note': note,
-    'createdAt': Timestamp.now(),
-    'createdBy': _loggedInUser?['name'] ?? _loggedInUser?['email'],
-  };
-  final doc = await firestore.collection('payments').add(data);
-  _payments.add({'id': doc.id, ...data, 'createdAt': DateTime.now()});
-  notifyListeners();
-}
-
-Future<void> fetchExpenses() async {
-  final snap = await firestore.collection('expenses').orderBy('createdAt', descending: true).get();
-  _expenses
-    ..clear()
-    ..addAll(snap.docs.map((d) {
-      final m = d.data();
-      final ts = m['createdAt'];
-      return {'id': d.id, ...m, 'createdAt': ts is Timestamp ? ts.toDate() : DateTime.now()};
-    }));
-  notifyListeners();
-}
-
-Future<void> fetchPayments() async {
-  final snap = await firestore.collection('payments').orderBy('createdAt', descending: true).get();
-  _payments
-    ..clear()
-    ..addAll(snap.docs.map((d) {
-      final m = d.data();
-      final ts = m['createdAt'];
-      return {'id': d.id, ...m, 'createdAt': ts is Timestamp ? ts.toDate() : DateTime.now()};
-    }));
-  notifyListeners();
-}
-
-Future<void> requestOrderReturn(String id, {String? note}) async {
-  await firestore.collection('orders').doc(id).update({
-    'isReturnRequested': true,
-    'returnNote': note ?? '',
-    'updatedAt': FieldValue.serverTimestamp(),
-  });
-  await fetchOrders();
-}
-
-
-Future<Set<String>> shopsWithSaleOn(DateTime day) async {
-  final key = dayKeyOf(day);
-  final qs = await firestore
-      .collection('sales')
-      .where('dayKey', isEqualTo: key)
+  final q = await firestore
+      .collection('wholesaler_balances')
+      .where('shopName', isEqualTo: shopName)
+      .where('wholesalerName', isEqualTo: wholesalerName)
+      .limit(1)
       .get();
-  final set = <String>{};
-  for (final d in qs.docs) {
-    final name = (d['shopName'] ?? d['shop'])?.toString();
-    if (name != null && name.isNotEmpty) set.add(name);
-  }
-  return set;
+
+  if (q.docs.isEmpty) return 0.0;
+  final d = q.docs.first.data();
+  return (d['balance'] ?? 0).toDouble();
 }
 
+Future<void> setWholesalerShopBalance({
+  required String shopName,
+  required String wholesalerName,
+  required double newBalance,
+  String? note,
+}) async {
+  final col = firestore.collection('wholesaler_balances');
+  final q = await col
+      .where('shopName', isEqualTo: shopName)
+      .where('wholesalerName', isEqualTo: wholesalerName)
+      .limit(1)
+      .get();
+
+  if (q.docs.isEmpty) {
+    await col.add({
+      'shopName': shopName,
+      'wholesalerName': wholesalerName,
+      'balance': newBalance,
+      'note': note ?? '',
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  } else {
+    final doc = q.docs.first.reference;
+    await doc.update({
+      'balance': newBalance,
+      'note': note ?? '',
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+}
+Future<Map<String, Map<String, Map<String, dynamic>>>> ordersMatrixForDate({
+  required DateTime date,
+  List<String>? wholesalersFilter, // optional specific columns
+}) async {
+  final dayKey = DateFormat('yyyy-MM-dd').format(date);
+  final snap = await firestore
+      .collection('orders')
+      .where('dayKey', isEqualTo: dayKey)
+      .get();
+
+  // matrix[shopName][wholesalerName] = {id, amount, status}
+  final Map<String, Map<String, Map<String, dynamic>>> matrix = {};
+
+  for (final d in snap.docs) {
+    final m = d.data();
+    final shop = (m['shopName'] ?? '').toString();
+    final wh = (m['wholesalerName'] ?? '').toString();
+    if (shop.isEmpty || wh.isEmpty) continue;
+    if (wholesalersFilter != null && wholesalersFilter.isNotEmpty &&
+        !wholesalersFilter.contains(wh)) continue;
+
+    matrix.putIfAbsent(shop, () => {});
+    matrix[shop]![wh] = {
+      'id': d.id,
+      'amount': (m['amount'] ?? 0).toDouble(),
+      'status': m['status'] ?? 'Pending',
+    };
+  }
+  return matrix;
+}
+Future<Map<String, List<Map<String, dynamic>>>> pullAllShopOrdersForDate({
+  required DateTime date,
+}) async {
+  final dayKey = DateFormat('yyyy-MM-dd').format(date);
+  final snap = await firestore
+      .collection('orders')
+      .where('dayKey', isEqualTo: dayKey)
+      .get();
+
+  // result[wholesalerName] = [ {shopName, amount, status, id}, ... ]
+  final Map<String, List<Map<String, dynamic>>> result = {};
+  for (final d in snap.docs) {
+    final m = d.data();
+    final wh = (m['wholesalerName'] ?? '').toString();
+    result.putIfAbsent(wh, () => []);
+    result[wh]!.add({
+      'id': d.id,
+      'shopName': m['shopName'] ?? '',
+      'amount': (m['amount'] ?? 0).toDouble(),
+      'status': m['status'] ?? 'Pending',
+    });
+  }
+  return result;
+}
+Future<void> addEmployeeExpenseEntry({
+  required String shopName,
+  required String employeeName,
+  required double amount,
+  required String type, // 'salary' | 'advance' | 'paid'
+  String? note,
+  DateTime? when,
+}) async {
+  final ts = Timestamp.fromDate(when ?? DateTime.now());
+  await firestore.collection('employee_expenses').add({
+    'shopName': shopName,
+    'employeeName': employeeName,
+    'amount': amount,
+    'type': type,
+    'note': note ?? '',
+    'createdAt': ts,
+  });
+}
+
+Future<Map<String, double>> getEmployeeExpenseMonthTotals({
+  required String shopName,
+  required String employeeName,
+  required DateTime monthAnchor, // any day of month
+}) async {
+  final start = DateTime(monthAnchor.year, monthAnchor.month, 1);
+  final end = DateTime(monthAnchor.year, monthAnchor.month + 1, 1);
+  final q = await firestore
+      .collection('employee_expenses')
+      .where('shopName', isEqualTo: shopName)
+      .where('employeeName', isEqualTo: employeeName)
+      .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
+      .where('createdAt', isLessThan: Timestamp.fromDate(end))
+      .get();
+
+  double salary = 0, advance = 0, paid = 0;
+  for (final d in q.docs) {
+    final m = d.data();
+    final t = (m['type'] ?? 'salary').toString();
+    final a = (m['amount'] ?? 0).toDouble();
+    if (t == 'advance') advance += a;
+    else if (t == 'paid') paid += a;
+    else salary += a;
+  }
+  // Remaining = salary + advance - paid
+  return {
+    'salary': salary,
+    'advance': advance,
+    'paid': paid,
+    'remaining': salary + advance - paid,
+  };
+}
+Future<void> addOtherExpenseEntry({
+  required String shopName,
+  required double amount,
+  required String title, // e.g., 'Gas in car'
+  String? note,
+  DateTime? when,
+}) async {
+  await firestore.collection('expenses').add({
+    'shopName': shopName,
+    'amount': amount,
+    'category': title,
+    'note': note ?? '',
+    'createdAt': Timestamp.fromDate(when ?? DateTime.now()),
+  });
+}
+
+Future<double> getOtherExpenseMonthTotal({
+  required String shopName,
+  required DateTime monthAnchor,
+}) async {
+  final start = DateTime(monthAnchor.year, monthAnchor.month, 1);
+  final end = DateTime(monthAnchor.year, monthAnchor.month + 1, 1);
+  final q = await firestore
+      .collection('expenses')
+      .where('shopName', isEqualTo: shopName)
+      .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
+      .where('createdAt', isLessThan: Timestamp.fromDate(end))
+      .get();
+  double sum = 0;
+  for (final d in q.docs) {
+    sum += (d.data()['amount'] ?? 0).toDouble();
+  }
+  return sum;
+}
+Future<void> addEmployeeExpense({
+  required String shopName,
+  required double amount,
+  String type = 'salary', // salary | advance | paid
+  String? employeeId,
+  String? employeeName,
+  String? note,
+}) async {
+  final data = {
+    'shopName': shopName,
+    'amount': amount,
+    'type': type,
+    'employeeId': employeeId ?? '',
+    'employeeName': employeeName ?? (_loggedInUser?['name'] ?? ''),
+    'note': note ?? '',
+    'createdAt': Timestamp.now(),
+    'createdBy': _loggedInUser?['name'] ?? _loggedInUser?['email'],
+  };
+  final doc = await firestore.collection('employee_expenses').add(data);
+  // local cache optional: fetch again to stay consistent
+  try { await fetchEmployeeExpenses(from: DateTime.now().subtract(const Duration(days: 1)), to: DateTime.now().add(const Duration(days: 1))); } catch (_) {}
+}
+
+
+  Future<Set<String>> shopsWithSaleOn(DateTime day) async {
+    final key = dayKeyOf(day);
+    final qs =
+        await firestore.collection('sales').where('dayKey', isEqualTo: key).get();
+    final set = <String>{};
+    for (final d in qs.docs) {
+      final name = (d['shopName'] ?? d['shop'])?.toString();
+      if (name != null && name.isNotEmpty) set.add(name);
+    }
+    return set;
+  }
 
   Future<bool> loginWithNameAndCode(String name, String code) async {
     final nameLower = name.trim().toLowerCase();
     final trimmedCode = code.trim();
 
     try {
-      // block/cleanup any stale auth user before code login
       if (FirebaseAuth.instance.currentUser != null) {
         await FirebaseAuth.instance.signOut();
       }
@@ -405,10 +733,8 @@ Future<Set<String>> shopsWithSaleOn(DateTime day) async {
           .where('loginCode', isEqualTo: trimmedCode)
           .get();
 
-      if (snapshot.docs.isEmpty)
-      {
-
-       return false;
+      if (snapshot.docs.isEmpty) {
+        return false;
       }
 
       final matches = snapshot.docs.where((d) {
@@ -416,10 +742,8 @@ Future<Set<String>> shopsWithSaleOn(DateTime day) async {
         return docName == nameLower;
       }).toList();
 
-      if (matches.isEmpty) 
-      {
-
-      return false;
+      if (matches.isEmpty) {
+        return false;
       }
 
       final match = matches.first;
@@ -457,10 +781,8 @@ Future<Set<String>> shopsWithSaleOn(DateTime day) async {
         password: password,
       );
       final u = cred.user;
-      if (u == null)
-      {
-
-       return false;
+      if (u == null) {
+        return false;
       }
 
       final userSnap = await firestore.collection('users').doc(u.uid).get();
@@ -491,14 +813,11 @@ Future<Set<String>> shopsWithSaleOn(DateTime day) async {
     }
   }
 
-  Future<void> _saveSession(
-      {required String mode, required String uid}) async {
+  Future<void> _saveSession({required String mode, required String uid}) async {
     final p = await SharedPreferences.getInstance();
     await p.setString('session_mode', mode); // 'auth' | 'code'
     await p.setString('session_uid', uid);
   }
-
-
 
   Future<void> clearSession() async {
     final p = await SharedPreferences.getInstance();
@@ -506,40 +825,37 @@ Future<Set<String>> shopsWithSaleOn(DateTime day) async {
     await p.remove('session_uid');
   }
 
-Future<void> restoreSession() async {
-  try {
-    final prefs = await SharedPreferences.getInstance();
-    final savedMode = prefs.getString('session_mode'); // 'auth' | 'code'
-    final savedUid  = prefs.getString('session_uid');
+  Future<void> restoreSession() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedMode = prefs.getString('session_mode'); // 'auth' | 'code'
+      final savedUid = prefs.getString('session_uid');
 
-    // ✅ Always trust FirebaseAuth first
-    final authUser = FirebaseAuth.instance.currentUser;
-    if (authUser != null) {
-      // Overwrite any stale 'code' session
-      await _saveSession(mode: 'auth', uid: authUser.uid);
+      final authUser = FirebaseAuth.instance.currentUser;
+      if (authUser != null) {
+        await _saveSession(mode: 'auth', uid: authUser.uid);
 
-      final snap = await firestore.collection('users').doc(authUser.uid).get();
-      if (snap.exists) {
-        final data = snap.data()!;
-        loginUser({...data, 'uid': authUser.uid});
-      }
-      return;
-    }
-
-    // ✅ Only if no auth user, fallback to code session
-    if (savedMode == 'code' && savedUid != null && savedUid.isNotEmpty) {
-      final snap = await firestore.collection('users').doc(savedUid).get();
-      if (snap.exists) {
-        final data = snap.data()!;
-        loginUser({...data, 'uid': savedUid});
+        final snap =
+            await firestore.collection('users').doc(authUser.uid).get();
+        if (snap.exists) {
+          final data = snap.data()!;
+          loginUser({...data, 'uid': authUser.uid});
+        }
         return;
-      } else {
-        // stale code session -> clear
-        await clearSession();
       }
-    }
-  } catch (_) {/* ignore */}
-}
+
+      if (savedMode == 'code' && savedUid != null && savedUid.isNotEmpty) {
+        final snap = await firestore.collection('users').doc(savedUid).get();
+        if (snap.exists) {
+          final data = snap.data()!;
+          loginUser({...data, 'uid': savedUid});
+          return;
+        } else {
+          await clearSession();
+        }
+      }
+    } catch (_) {/* ignore */}
+  }
 
   Future<void> logout() async {
     try {
@@ -552,41 +868,40 @@ Future<void> restoreSession() async {
     notifyListeners();
   }
 
-Future<void> addSaleUniquePerShopPerDay(Map<String, dynamic> saleData) async {
-  final now = DateTime.now();
-  final todayStr = DateFormat('yyyy-MM-dd').format(now);
-  final shopKey = (saleData['shop'] ?? '').toString().trim();
+  Future<void> addSaleUniquePerShopPerDay(Map<String, dynamic> saleData) async {
+    final now = DateTime.now();
+    final todayStr = DateFormat('yyyy-MM-dd').format(now);
+    final shopKey = (saleData['shop'] ?? '').toString().trim();
 
-  if (shopKey.isEmpty) {
-    throw 'Shop is required';
-  }
-
-  final docId = '$shopKey|$todayStr';
-  final docRef = firestore.collection('sales').doc(docId);
-
-  await firestore.runTransaction((tx) async {
-    final snap = await tx.get(docRef);
-    if (snap.exists) {
-      throw 'Sale already exists for this shop today';
+    if (shopKey.isEmpty) {
+      throw 'Shop is required';
     }
 
-    final data = {
-      ...saleData,
-      'createdAt': Timestamp.fromDate(now),
-      'saleDate': todayStr,
-    };
-    tx.set(docRef, data);
-  });
+    final docId = '$shopKey|$todayStr';
+    final docRef = firestore.collection('sales').doc(docId);
 
-  // local cache update
-  _sales.add({
-    ...saleData,
-    'id': docId,
-    'createdAt': now,
-    'saleDate': todayStr,
-  });
-  notifyListeners();
-}
+    await firestore.runTransaction((tx) async {
+      final snap = await tx.get(docRef);
+      if (snap.exists) {
+        throw 'Sale already exists for this shop today';
+      }
+
+      final data = {
+        ...saleData,
+        'createdAt': Timestamp.fromDate(now),
+        'saleDate': todayStr,
+      };
+      tx.set(docRef, data);
+    });
+
+    _sales.add({
+      ...saleData,
+      'id': docId,
+      'createdAt': now,
+      'saleDate': todayStr,
+    });
+    notifyListeners();
+  }
 
   // --------- Sales querying helpers ---------
   Query<Map<String, dynamic>> buildSalesQuery({
@@ -619,37 +934,41 @@ Future<void> addSaleUniquePerShopPerDay(Map<String, dynamic> saleData) async {
     return q;
   }
 
-// lib/providers/app_data_provider.dart
-Map<String, dynamic> mapSaleDoc(QueryDocumentSnapshot<Map<String, dynamic>> d) {
-  final data = d.data();
+  Map<String, dynamic> mapSaleDoc(
+      QueryDocumentSnapshot<Map<String, dynamic>> d) {
+    final data = d.data();
 
-  DateTime created;
-  final raw = data['createdAt'];
-  if (raw is Timestamp)      created = raw.toDate();
-  else if (raw is DateTime)  created = raw;
-  else if (raw is String)    created = DateTime.tryParse(raw) ?? DateTime.now();
-  else                       created = DateTime.now();
+    DateTime created;
+    final raw = data['createdAt'];
+    if (raw is Timestamp) {
+      created = raw.toDate();
+    } else if (raw is DateTime) {
+      created = raw;
+    } else if (raw is String) {
+      created = DateTime.tryParse(raw) ?? DateTime.now();
+    } else {
+      created = DateTime.now();
+    }
 
-  double toD(v) => v is num ? v.toDouble() : double.tryParse('${v ?? ""}') ?? 0.0;
+    double toD(v) =>
+        v is num ? v.toDouble() : double.tryParse('${v ?? ""}') ?? 0.0;
 
-  return {
-    'id': d.id,
-    // 🔽 here: fallback to shopName
-    'shop': (data['shop'] ?? data['shopName'] ?? '').toString(),
-    'employee': (data['employee'] ?? data['addedBy'] ?? '').toString(),
-    'cash': toD(data['cash']),
-    'card': toD(data['card']),
-    'other': toD(data['other']),
-    'total': toD(data['total']),
-    'createdAt': created,
-    'saleDate': DateFormat('yyyy-MM-dd').format(created),
-  };
-}
+    return {
+      'id': d.id,
+      'shop': (data['shop'] ?? data['shopName'] ?? '').toString(),
+      'employee': (data['employee'] ?? data['addedBy'] ?? '').toString(),
+      'cash': toD(data['cash']),
+      'card': toD(data['card']),
+      'other': toD(data['other']),
+      'total': toD(data['total']),
+      'createdAt': created,
+      'saleDate': DateFormat('yyyy-MM-dd').format(created),
+    };
+  }
 
   // --------- Selected Shop (for employee flow) ---------
   String? _selectedShopId;
   String? _selectedShopName;
-
   String? get selectedShopId => _selectedShopId;
   String? get selectedShopName => _selectedShopName;
 
@@ -659,7 +978,7 @@ Map<String, dynamic> mapSaleDoc(QueryDocumentSnapshot<Map<String, dynamic>> d) {
     notifyListeners();
   }
 
-  // --------- Edit Requests (Local list + Firestore) ---------
+  // --------- Edit Requests ---------
   List<Map<String, dynamic>> get editRequests => _editRequests;
 
   void addEditRequest({
@@ -754,7 +1073,10 @@ Map<String, dynamic> mapSaleDoc(QueryDocumentSnapshot<Map<String, dynamic>> d) {
   Future<void> updateSaleAmount(
       String saleId, double newAmount, String reason) async {
     try {
-      await FirebaseFirestore.instance.collection('sales').doc(saleId).update({
+      await FirebaseFirestore.instance
+          .collection('sales')
+          .doc(saleId)
+          .update({
         'total': newAmount,
         'editReason': reason,
         'editedAt': Timestamp.now(),
@@ -784,16 +1106,14 @@ Map<String, dynamic> mapSaleDoc(QueryDocumentSnapshot<Map<String, dynamic>> d) {
     if (employeeData.isNotEmpty) {
       employees.add(employeeData);
       final name = employeeData['name'];
-      final List<String> assignedShops = List<String>.from(
-        employeeData['assignedShops'] ?? [],
-      );
+      final List<String> assignedShops =
+          List<String>.from(employeeData['assignedShops'] ?? []);
 
       for (String shopName in assignedShops) {
         final index = shops.indexWhere((s) => s['name'] == shopName);
         if (index != -1) {
-          final existingEmployees = List<String>.from(
-            shops[index]['employees'] ?? [],
-          );
+          final existingEmployees =
+              List<String>.from(shops[index]['employees'] ?? []);
           if (!existingEmployees.contains(name)) {
             existingEmployees.add(name);
             shops[index]['employees'] = existingEmployees;
@@ -868,7 +1188,8 @@ Map<String, dynamic> mapSaleDoc(QueryDocumentSnapshot<Map<String, dynamic>> d) {
       final employeesSnapshot = await firestore.collection('employees').get();
       for (var doc in employeesSnapshot.docs) {
         final data = doc.data();
-        final assignedShops = List<String>.from(data['assignedShops'] ?? []);
+        final assignedShops =
+            List<String>.from(data['assignedShops'] ?? []);
         if (assignedShops.contains(shopName)) {
           assignedShops.remove(shopName);
           await firestore.collection('employees').doc(doc.id).update({
@@ -888,7 +1209,6 @@ Map<String, dynamic> mapSaleDoc(QueryDocumentSnapshot<Map<String, dynamic>> d) {
   /// NEVER delete admin; delete user/employee safely and clean references in shops
   Future<void> deleteEmployeeById(String uid, String name) async {
     try {
-      // guard admin
       final userDoc = await firestore.collection('users').doc(uid).get();
       final role =
           ((userDoc.data()?['role'] ?? '') as String).toLowerCase().trim();
@@ -897,16 +1217,13 @@ Map<String, dynamic> mapSaleDoc(QueryDocumentSnapshot<Map<String, dynamic>> d) {
         return;
       }
 
-      // delete from 'employees' if exists
       final empDoc = await firestore.collection('employees').doc(uid).get();
       if (empDoc.exists) {
         await firestore.collection('employees').doc(uid).delete();
       }
 
-      // delete from 'users'
       await firestore.collection('users').doc(uid).delete();
 
-      // remove from shops.employees[]
       final shopsSnapshot = await firestore.collection('shops').get();
       for (var doc in shopsSnapshot.docs) {
         final data = doc.data();
@@ -943,9 +1260,8 @@ Map<String, dynamic> mapSaleDoc(QueryDocumentSnapshot<Map<String, dynamic>> d) {
   void assignAccess(String shopName, String employeeName) {
     final shopIndex = shops.indexWhere((shop) => shop['name'] == shopName);
     if (shopIndex != -1) {
-      final currentEmployees = List<String>.from(
-        shops[shopIndex]['employees'] ?? [],
-      );
+      final currentEmployees =
+          List<String>.from(shops[shopIndex]['employees'] ?? []);
       if (!currentEmployees.contains(employeeName)) {
         currentEmployees.add(employeeName);
         shops[shopIndex]['employees'] = currentEmployees;
@@ -962,76 +1278,70 @@ Map<String, dynamic> mapSaleDoc(QueryDocumentSnapshot<Map<String, dynamic>> d) {
   }
 
   // --------- Orders ---------
-Future<void> addOrder(Map<String, dynamic> order) async {
-  try {
-    // Ensure defaults
-    order['status'] ??= 'Pending';
-    order['createdAt'] ??= Timestamp.now();
-    order['canRequestEdit'] ??= true;
+  Future<void> addOrder(Map<String, dynamic> order) async {
+    try {
+      order['status'] ??= 'Pending';
+      order['createdAt'] ??= Timestamp.now();
+      order['canRequestEdit'] ??= true;
 
-    if (order['id'] != null && order['id'].toString().isNotEmpty) {
-      // Known id → set()
-      final id = order['id'].toString();
-      await FirebaseFirestore.instance.collection('orders').doc(id).set(order);
-      // local cache
-      _orders.add({...order, 'id': id, 'createdAt': _toDate(order['createdAt'])});
-    } else {
-      // No id → add()
-      final docRef =
-          await FirebaseFirestore.instance.collection('orders').add(order);
-      // local cache
-      _orders.add({...order, 'id': docRef.id, 'createdAt': _toDate(order['createdAt'])});
-    }
+      if (order['id'] != null && order['id'].toString().isNotEmpty) {
+        final id = order['id'].toString();
+        await FirebaseFirestore.instance.collection('orders').doc(id).set(order);
+        _orders
+            .add({...order, 'id': id, 'createdAt': _toDate(order['createdAt'])});
+      } else {
+        final docRef =
+            await FirebaseFirestore.instance.collection('orders').add(order);
+        _orders.add(
+            {...order, 'id': docRef.id, 'createdAt': _toDate(order['createdAt'])});
+      }
 
-    notifyListeners();
-  } catch (e) {
-    log('Error adding order: $e', name: 'Orders');
-  }
-}
-
-// small helper to normalize DateTime
-DateTime _toDate(dynamic raw) {
-  if (raw is Timestamp) return raw.toDate();
-  if (raw is DateTime) return raw;
-  if (raw is String) return DateTime.tryParse(raw) ?? DateTime.now();
-  return DateTime.now();
-}
-
-Future<void> forwardOrder(String id) async {
-  try {
-    await updateOrderStatus(id, 'Forwarded'); // <-- Firestore
-    final i = _orders.indexWhere((o) => o['id'] == id);
-    if (i != -1) {
-      _orders[i] = {
-        ..._orders[i],
-        'status': 'Forwarded',
-        'updatedAt': DateTime.now(),
-      };
       notifyListeners();
+    } catch (e) {
+      log('Error adding order: $e', name: 'Orders');
     }
-  } catch (e) {
-    log('Error forwarding order: $e', name: 'Orders');
   }
-}
 
-Future<void> markOrderReceived(String id) async {
-  try {
-    await updateOrderStatus(id, 'Received'); // <-- Firestore
-    final i = _orders.indexWhere((o) => o['id'] == id);
-    if (i != -1) {
-      _orders[i] = {
-        ..._orders[i],
-        'status': 'Received',
-        'updatedAt': DateTime.now(),
-      };
-      notifyListeners();
+  DateTime _toDate(dynamic raw) {
+    if (raw is Timestamp) return raw.toDate();
+    if (raw is DateTime) return raw;
+    if (raw is String) return DateTime.tryParse(raw) ?? DateTime.now();
+    return DateTime.now();
+  }
+
+  Future<void> forwardOrder(String id) async {
+    try {
+      await updateOrderStatus(id, 'Forwarded');
+      final i = _orders.indexWhere((o) => o['id'] == id);
+      if (i != -1) {
+        _orders[i] = {
+          ..._orders[i],
+          'status': 'Forwarded',
+          'updatedAt': DateTime.now(),
+        };
+        notifyListeners();
+      }
+    } catch (e) {
+      log('Error forwarding order: $e', name: 'Orders');
     }
-  } catch (e) {
-    log('Error marking order received: $e', name: 'Orders');
   }
-}
 
-
+  Future<void> markOrderReceived(String id) async {
+    try {
+      await updateOrderStatus(id, 'Received');
+      final i = _orders.indexWhere((o) => o['id'] == id);
+      if (i != -1) {
+        _orders[i] = {
+          ..._orders[i],
+          'status': 'Received',
+          'updatedAt': DateTime.now(),
+        };
+        notifyListeners();
+      }
+    } catch (e) {
+      log('Error marking order received: $e', name: 'Orders');
+    }
+  }
 
   Future<void> deleteOrder(String id) async {
     try {
@@ -1061,28 +1371,26 @@ Future<void> markOrderReceived(String id) async {
     }
   }
 
-bool canEditOrder(Map<String, dynamic> order) {
-  final raw = order['createdAt'];
-  DateTime? createdAt;
+  bool canEditOrder(Map<String, dynamic> order) {
+    final raw = order['createdAt'];
+    DateTime? createdAt;
 
-  if (raw is DateTime) {
-    createdAt = raw;
-  } else if (raw is Timestamp) {
-    createdAt = raw.toDate();
+    if (raw is DateTime) {
+      createdAt = raw;
+    } else if (raw is Timestamp) {
+      createdAt = raw.toDate();
+    }
+
+    if (createdAt == null) {
+      return false;
+    }
+
+    return DateTime.now().difference(createdAt).inMinutes <= 10;
   }
-
-  if (createdAt == null) {
-    return false;
-  }
-
-  return DateTime.now().difference(createdAt).inMinutes <= 10;
-}
-
-
 
   List<Map<String, dynamic>> getEmployeeOrders(String employeeName) {
-  return _orders.where((o) => o['createdByName'] == employeeName).toList();
-}
+    return _orders.where((o) => o['createdByName'] == employeeName).toList();
+  }
 
   // --------- Sales ---------
   List<Map<String, dynamic>> get allSales => [..._sales];
@@ -1178,7 +1486,7 @@ bool canEditOrder(Map<String, dynamic> order) {
     }).toList();
   }
 
-    Map<String, String> getFilteredTotals(String filter) {
+  Map<String, String> getFilteredTotals(String filter) {
     double cash = 0.0, card = 0.0, other = 0.0;
 
     final filtered = getFilteredSales(filter);
@@ -1287,144 +1595,299 @@ bool canEditOrder(Map<String, dynamic> order) {
     }
   }
 
-// ---------- Storage: upload invoice image ----------
-Future<String> uploadInvoiceBytes(Uint8List bytes, {required String shopName, required String wholesaler}) async {
-  final now = DateTime.now();
-  final dayKey = DateFormat('yyyyMMdd_HHmmss').format(now);
-  final path = 'invoices/$shopName/$wholesaler/$dayKey.jpg';
-  final ref = FirebaseStorage.instance.ref(path);
-  final task = await ref.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
-  return await task.ref.getDownloadURL();
-}
-
-// ---------- Orders helpers: uniqueness + place ----------
-Future<String?> placeOrderUniquePerDay({
-  required String shopName,
-  String? wholesalerId,            // <- optional now
-  required String wholesalerName,
-  required double amount,
-  double? amount2,
-  String? note,
-  String? invoiceUrl,
-}) async {
-  final user = _loggedInUser ?? {};
-  final dayKey = DateFormat('yyyy-MM-dd').format(DateTime.now());
-
-  // one order per (shop + wholesalerName + day)
-  final dup = await firestore.collection('orders')
-      .where('shopName', isEqualTo: shopName)
-      .where('wholesalerName', isEqualTo: wholesalerName) // <- name-based
-      .where('dayKey', isEqualTo: dayKey)
-      .limit(1)
-      .get();
-
-  if (dup.docs.isNotEmpty) {
-    return 'Today’s order already exists for this wholesaler & shop.';
+  // ---------- Storage: upload invoice image ----------
+  Future<String> uploadInvoiceBytes(Uint8List bytes,
+      {required String shopName, required String wholesaler}) async {
+    final now = DateTime.now();
+    final dayKey = DateFormat('yyyyMMdd_HHmmss').format(now);
+    final path = 'invoices/$shopName/$wholesaler/$dayKey.jpg';
+    final ref = FirebaseStorage.instance.ref(path);
+    final task = await ref
+        .putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
+    return await task.ref.getDownloadURL();
   }
 
-  final data = {
-    'shopName': shopName,
-    'wholesalerId': wholesalerId ?? '',     // optional
-    'wholesalerName': wholesalerName,
-    'amount': amount,
-    if (amount2 != null) 'amount2': amount2,
-    'status': 'Pending',
-    'invoiceUrl': invoiceUrl,
-    'note': note,
-    'createdAt': Timestamp.now(),
-    'updatedAt': Timestamp.now(),
-    'createdByUid': user['uid'],
-    'createdByName': user['name'] ?? user['email'],
-    'dayKey': dayKey,
-  };
+  // ---------- Orders helpers: uniqueness + place ----------
+  Future<String?> placeOrderUniquePerDay({
+    required String shopName,
+    String? wholesalerId,
+    required String wholesalerName,
+    required double amount,
+    double? amount2,
+    String? note,
+    String? invoiceUrl,
+  }) async {
+    final user = _loggedInUser ?? {};
+    final dayKey = DateFormat('yyyy-MM-dd').format(DateTime.now());
 
-  await addOrder(data);
-  return null;
-}
+    final dup = await firestore
+        .collection('orders')
+        .where('shopName', isEqualTo: shopName)
+        .where('wholesalerName', isEqualTo: wholesalerName)
+        .where('dayKey', isEqualTo: dayKey)
+        .limit(1)
+        .get();
 
-
-List<Map<String,dynamic>> wholesalers = [];
-
-Future<void> fetchWholesalers() async {
-  final snap = await firestore
-      .collection('wholesalers')
-      .where('isActive', isEqualTo: true)
-      .get();
-
-  wholesalers = snap.docs.map((d) {
-    final m = d.data();
-    return {
-      'id': d.id,
-      ...m,
-      'name': (m['name'] ?? '').toString(),
-      'nameLower': (m['nameLower'] ?? (m['name'] ?? '')).toString().toLowerCase(),
-      'phone': (m['phone'] ?? '').toString(),
-      'address': (m['address'] ?? '').toString(),
-    };
-  }).toList()
-    ..sort((a, b) => (a['nameLower'] as String).compareTo(b['nameLower'] as String));
-
-  notifyListeners();
-}
-
-// ---------- Query builder for Orders (role-aware optional) ----------
-Query<Map<String, dynamic>> buildOrdersQuery({
-  String? shopName,           // null => all
-  String? status,             // null => all
-  String? wholesalerName,     // null => all
-  DateTime? from,             // inclusive
-  DateTime? to,               // exclusive
-}) {
-  var q = firestore.collection('orders').orderBy('createdAt', descending: true);
-  if (shopName != null && shopName.isNotEmpty && shopName != 'All') {
-    q = q.where('shopName', isEqualTo: shopName);
-  }
-  if (status != null && status.isNotEmpty && status != 'All') {
-    q = q.where('status', isEqualTo: status);
-  }
-  if (wholesalerName != null && wholesalerName.isNotEmpty) {
-    q = q.where('wholesalerName', isEqualTo: wholesalerName);
-  }
-  if (from != null) {
-    q = q.where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(from));
-  }
-  if (to != null) {
-    q = q.where('createdAt', isLessThan: Timestamp.fromDate(to));
-  }
-  return q;
-}
-
-// ---------- Status update ----------
-Future<void> updateOrderStatus(String orderId, String newStatus) async {
-  await firestore.collection('orders').doc(orderId).update({
-    'status': newStatus,
-    'updatedAt': FieldValue.serverTimestamp(),
-  });
-  await fetchOrders(); // keep list fresh
-}
-
-Future<void> markOrderForwarded(String id) async {
-  try {
-    await firestore.collection('orders').doc(id).update({
-      'status': 'Forwarded',
-      'updatedAt': Timestamp.now(),
-    });
-
-    // local cache update if present
-    final i = _orders.indexWhere((o) => o['id'].toString() == id);
-    if (i != -1) {
-      _orders[i] = {
-        ..._orders[i],
-        'status': 'Forwarded',
-        'updatedAt': DateTime.now(),
-      };
-      notifyListeners();
+    if (dup.docs.isNotEmpty) {
+      return 'Today’s order already exists for this wholesaler & shop.';
     }
-  } catch (e) {
-    debugPrint('markOrderForwarded error: $e');
-  }
-}
 
+    final data = {
+      'shopName': shopName,
+      'wholesalerId': wholesalerId ?? '',
+      'wholesalerName': wholesalerName,
+      'amount': amount,
+      if (amount2 != null) 'amount2': amount2,
+      'status': 'Pending',
+      'invoiceUrl': invoiceUrl,
+      'note': note,
+      'createdAt': Timestamp.now(),
+      'updatedAt': Timestamp.now(),
+      'createdByUid': user['uid'],
+      'createdByName': user['name'] ?? user['email'],
+      'dayKey': dayKey,
+    };
+
+    await addOrder(data);
+    return null;
+  }
+
+  List<Map<String, dynamic>> wholesalers = [];
+
+  Future<void> fetchWholesalers() async {
+    final snap = await firestore
+        .collection('wholesalers')
+        .where('isActive', isEqualTo: true)
+        .get();
+
+    wholesalers = snap.docs.map((d) {
+      final m = d.data();
+      return {
+        'id': d.id,
+        ...m,
+        'name': (m['name'] ?? '').toString(),
+        'nameLower':
+            (m['nameLower'] ?? (m['name'] ?? '')).toString().toLowerCase(),
+        'phone': (m['phone'] ?? '').toString(),
+        'address': (m['address'] ?? '').toString(),
+      };
+    }).toList()
+      ..sort((a, b) =>
+          (a['nameLower'] as String).compareTo(b['nameLower'] as String));
+
+    notifyListeners();
+  }
+
+  Future<List<Map<String, dynamic>>> fetchSalesBetween({
+    required DateTime from,
+    required DateTime to,
+    String? shopName, // null => all shops
+  }) async {
+    final q = buildSalesQuery(
+        from: from,
+        to: to,
+        shop: (shopName == null || shopName == 'All') ? null : shopName);
+    final snap = await q.get();
+    return snap.docs.map(mapSaleDoc).toList();
+  }
+
+  Future<List<Map<String, dynamic>>> fetchWholesalerInvoices({
+    required DateTime from,
+    required DateTime to,
+    String? shopName, // optional
+  }) async {
+    var q = firestore
+        .collection('orders')
+        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(from))
+        .where('createdAt', isLessThan: Timestamp.fromDate(to));
+
+    if (shopName != null && shopName != 'All') {
+      q = q.where('shopName', isEqualTo: shopName);
+    }
+
+    final snap = await q.get();
+    return snap.docs.map((d) {
+      final m = d.data();
+      final raw = m['createdAt'];
+      DateTime? created = raw is Timestamp
+          ? raw.toDate()
+          : (raw is String ? DateTime.tryParse(raw) : null);
+      return {
+        'id': d.id,
+        'wholesalerId': m['wholesalerId'] ?? '',
+        'wholesalerName': m['wholesalerName'] ?? m['toWholesalerName'] ?? '',
+        'amount': (m['amount'] ?? m['invoiceAmount'] ?? 0).toDouble(),
+        'status': m['status'] ?? 'Pending',
+        'invoiceUrl': m['invoiceUrl'] ?? '',
+        'createdAt': created,
+        'dayKey': m['dayKey'] ?? '',
+        'shopName': m['shopName'] ?? m['shop'] ?? '',
+      };
+    }).toList();
+  }
+
+  Future<List<Map<String, dynamic>>> fetchEmployeeExpenses({
+    required DateTime from,
+    required DateTime to,
+    String? shopName,
+  }) async {
+    var q = firestore
+        .collection('employee_expenses')
+        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(from))
+        .where('createdAt', isLessThan: Timestamp.fromDate(to));
+    if (shopName != null && shopName != 'All') {
+      q = q.where('shopName', isEqualTo: shopName);
+    }
+    final snap = await q.get();
+    return snap.docs.map((d) {
+      final m = d.data();
+      final raw = m['createdAt'];
+      DateTime? created = raw is Timestamp
+          ? raw.toDate()
+          : (raw is String ? DateTime.tryParse(raw) : null);
+      return {
+        'id': d.id,
+        'employeeId': m['employeeId'] ?? '',
+        'employeeName': m['employeeName'] ?? '',
+        'amount': (m['amount'] ?? 0).toDouble(),
+        'type': m['type'] ?? 'salary', // salary|advance|paid
+        'note': m['note'] ?? '',
+        'createdAt': created,
+        'shopName': m['shopName'] ?? '',
+      };
+    }).toList();
+  }
+
+  Future<List<Map<String, dynamic>>> fetchOtherExpenses({
+    required DateTime from,
+    required DateTime to,
+    String? shopName,
+  }) async {
+    var q = firestore
+        .collection('expenses')
+        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(from))
+        .where('createdAt', isLessThan: Timestamp.fromDate(to));
+    if (shopName != null && shopName != 'All') {
+      q = q.where('shopName', isEqualTo: shopName);
+    }
+    final snap = await q.get();
+    return snap.docs.map((d) {
+      final m = d.data();
+      final raw = m['createdAt'];
+      DateTime? created = raw is Timestamp
+          ? raw.toDate()
+          : (raw is String ? DateTime.tryParse(raw) : null);
+      return {
+        'id': d.id,
+        'title': m['category'] ?? 'Expense',
+        'amount': (m['amount'] ?? 0).toDouble(),
+        'note': m['note'] ?? '',
+        'createdAt': created,
+        'shopName': m['shopName'] ?? '',
+      };
+    }).toList();
+  }
+
+  Future<List<Map<String, dynamic>>> fetchOrdersForDate({
+    required String? shopName, // null or 'All' means all shops
+    required DateTime date,
+  }) async {
+    final dayKey = DateFormat('yyyy-MM-dd').format(date);
+    var q =
+        firestore.collection('orders').where('dayKey', isEqualTo: dayKey);
+    if (shopName != null && shopName != 'All') {
+      q = q.where('shopName', isEqualTo: shopName);
+    }
+    final snap = await q.get();
+    return snap.docs.map((d) {
+      final m = d.data();
+      final raw = m['createdAt'];
+      DateTime? created = raw is Timestamp
+          ? raw.toDate()
+          : (raw is String ? DateTime.tryParse(raw) : null);
+      return {
+        'id': d.id,
+        'wholesalerName': m['wholesalerName'] ?? '',
+        'amount': (m['amount'] ?? 0).toDouble(),
+        'status': m['status'] ?? 'Pending',
+        'invoiceUrl': m['invoiceUrl'] ?? '',
+        'createdAt': created,
+        'shopName': m['shopName'] ?? '',
+      };
+    }).toList();
+  }
+
+  Future<void> recordWholesalerPayment({
+    required String shopName,
+    required String wholesalerName,
+    required double amount,
+    String? note,
+  }) async {
+    await addPayment(
+        shopName: shopName,
+        amount: amount,
+        toWholesalerName: wholesalerName,
+        note: note);
+    await fetchPayments();
+  }
+
+  // ---------- Query builder for Orders ----------
+  Query<Map<String, dynamic>> buildOrdersQuery({
+    String? shopName, // null => all
+    String? status, // null => all
+    String? wholesalerName, // null => all
+    DateTime? from, // inclusive
+    DateTime? to, // exclusive
+  }) {
+    var q =
+        firestore.collection('orders').orderBy('createdAt', descending: true);
+    if (shopName != null && shopName.isNotEmpty && shopName != 'All') {
+      q = q.where('shopName', isEqualTo: shopName);
+    }
+    if (status != null && status.isNotEmpty && status != 'All') {
+      q = q.where('status', isEqualTo: status);
+    }
+    if (wholesalerName != null && wholesalerName.isNotEmpty) {
+      q = q.where('wholesalerName', isEqualTo: wholesalerName);
+    }
+    if (from != null) {
+      q = q.where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(from));
+    }
+    if (to != null) {
+      q = q.where('createdAt', isLessThan: Timestamp.fromDate(to));
+    }
+    return q;
+  }
+
+  // ---------- Status update ----------
+  Future<void> updateOrderStatus(String orderId, String newStatus) async {
+    await firestore.collection('orders').doc(orderId).update({
+      'status': newStatus,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    await fetchOrders();
+  }
+
+  Future<void> markOrderForwarded(String id) async {
+    try {
+      await firestore.collection('orders').doc(id).update({
+        'status': 'Forwarded',
+        'updatedAt': Timestamp.now(),
+      });
+
+      final i = _orders.indexWhere((o) => o['id'].toString() == id);
+      if (i != -1) {
+        _orders[i] = {
+          ..._orders[i],
+          'status': 'Forwarded',
+          'updatedAt': DateTime.now(),
+        };
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('markOrderForwarded error: $e');
+    }
+  }
 
   Future<void> fetchOrders() async {
     try {
@@ -1475,18 +1938,18 @@ Future<void> markOrderForwarded(String id) async {
           } else if (raw is String) {
             created = DateTime.tryParse(raw);
           }
-          created ??= DateTime.tryParse('${data['date'] ?? ''}') ??
-              DateTime.now();
+          created ??=
+              DateTime.tryParse('${data['date'] ?? ''}') ?? DateTime.now();
 
           double numOrZero(v) => v is num
               ? v.toDouble()
-              : double.tryParse(v?.toString() ?? '') ??
-                  0.0;
+              : double.tryParse(v?.toString() ?? '') ?? 0.0;
 
           return {
             'id': doc.id,
             'shop': (data['shop'] ?? '').toString(),
-            'employee': (data['employee'] ?? data['addedBy'] ?? '').toString(),
+            'employee':
+                (data['employee'] ?? data['addedBy'] ?? '').toString(),
             'cash': numOrZero(data['cash']),
             'card': numOrZero(data['card']),
             'other': numOrZero(data['other']),
@@ -1528,12 +1991,10 @@ Future<void> markOrderForwarded(String id) async {
   Future<void> updateShopAssignments({
     required String userId,
     required String userName,
-    required List<String> newAssignedShops, // shop NAMES
+    required List<String> newAssignedShops,
   }) async {
-    final desired = newAssignedShops
-        .map((s) => s.trim())
-        .where((s) => s.isNotEmpty)
-        .toSet();
+    final desired =
+        newAssignedShops.map((s) => s.trim()).where((s) => s.isNotEmpty).toSet();
 
     final empRef = firestore.collection('employees').doc(userId);
     final empSnap = await empRef.get();
@@ -1602,12 +2063,13 @@ Future<void> markOrderForwarded(String id) async {
     } catch (_) {}
   }
 
-bool _listenersStarted = false;
+  bool _listenersStarted = false;
 
   // --------- Live listeners ---------
   void startFirebaseListeners() {
-     if (_listenersStarted) return;
-  _listenersStarted = true;
+    if (_listenersStarted) return;
+    _listenersStarted = true;
+
     firestore.collection('shops').snapshots().listen((snapshot) {
       shops = snapshot.docs.map((d) => {'id': d.id, ...d.data()}).toList();
       notifyListeners();
@@ -1631,7 +2093,6 @@ bool _listenersStarted = false;
       notifyListeners();
     });
 
-    // users list (separate)
     firestore.collection('users').snapshots().listen((snapshot) {
       usersList = snapshot.docs.map((d) {
         final data = d.data();
@@ -1651,41 +2112,42 @@ bool _listenersStarted = false;
     });
 
     firestore.collection('orders').snapshots().listen((snapshot) {
-  _orders
-    ..clear()
-    ..addAll(snapshot.docs.map((d) {
-      final data = d.data();
-      final createdAt = _toDate(data['createdAt']);
-      return {'id': d.id, ...data, 'createdAt': createdAt};
-    }));
-  notifyListeners();
-});
+      _orders
+        ..clear()
+        ..addAll(snapshot.docs.map((d) {
+          final data = d.data();
+          final createdAt = _toDate(data['createdAt']);
+          return {'id': d.id, ...data, 'createdAt': createdAt};
+        }));
+      notifyListeners();
+    });
 
-  firestore.collection('sales').snapshots().listen((snapshot) {
-  _sales
-    ..clear()
-    ..addAll(snapshot.docs.map((d) {
-      final data = d.data();
-      final raw = data['createdAt'];
-      DateTime? createdAt;
+    firestore.collection('sales').snapshots().listen((snapshot) {
+      _sales
+        ..clear()
+        ..addAll(snapshot.docs.map((d) {
+          final data = d.data();
+          final raw = data['createdAt'];
+          DateTime? createdAt;
 
-      if (raw is Timestamp) {
-        createdAt = raw.toDate();
-      } else if (raw is DateTime) {
-        createdAt = raw;
-      } else if (raw is String) {
-        createdAt = DateTime.tryParse(raw);
-      }
+          if (raw is Timestamp) {
+            createdAt = raw.toDate();
+          } else if (raw is DateTime) {
+            createdAt = raw;
+          } else if (raw is String) {
+            createdAt = DateTime.tryParse(raw);
+          }
 
-      return {'id': d.id, ...data, 'createdAt': createdAt};
-    }));
-  notifyListeners();
-});
+          return {'id': d.id, ...data, 'createdAt': createdAt};
+        }));
+      notifyListeners();
+    });
 
     firestore.collection('editRequests').snapshots().listen((snapshot) {
       _editRequests
         ..clear()
-        ..addAll(snapshot.docs.map((d) => {'firebaseId': d.id, ...d.data()}));
+        ..addAll(snapshot.docs
+            .map((d) => {'firebaseId': d.id, ...d.data()}));
       notifyListeners();
     });
   }
@@ -1726,57 +2188,50 @@ bool _listenersStarted = false;
     notifyListeners();
   }
 
-
-  /// 🗑️ Delete a sale by its document ID
-  /// 🗑️ Delete a sale by its document ID
-Future<void> deleteSale(String saleId) async {
-  try {
-    await firestore.collection('sales').doc(saleId).delete();
-    _sales.removeWhere((sale) => sale['id'] == saleId);
-    notifyListeners();
-    log('Sale deleted: $saleId', name: 'Sales');
-  } catch (e) {
-    log('Error deleting sale: $e', name: 'Sales');
-    rethrow;
-  }
-}
-
-  /// ✏️ Edit/Update a sale
-  /// ✏️ Backward-compatible single-arg edit (matches old calls from UI)
-Future<void> editSale(Map<String, dynamic> updatedSale) async {
-  try {
-    final saleId = (updatedSale['id'] ?? updatedSale['saleId'] ?? '').toString();
-    if (saleId.isEmpty) {
-      log('editSale: missing sale id in map', name: 'Sales');
-      return;
-    }
-
-    // Firestore me 'id' field nahi rakhte — copy bana ke 'id' hata do
-    final dataToUpdate = {...updatedSale}..remove('id');
-    dataToUpdate['updatedAt'] = FieldValue.serverTimestamp();
-
-    await firestore.collection('sales').doc(saleId).update(dataToUpdate);
-
-    // Local list update for instant UI refresh
-    final idx = _sales.indexWhere((s) => s['id'] == saleId);
-    if (idx != -1) {
-      _sales[idx] = {
-        ..._sales[idx],
-        ...updatedSale,
-        'id': saleId,
-      };
+  Future<void> deleteSale(String saleId) async {
+    try {
+      await firestore.collection('sales').doc(saleId).delete();
+      _sales.removeWhere((sale) => sale['id'] == saleId);
       notifyListeners();
-    } else {
-      // If not found locally, just refetch
-      await fetchSales();
+      log('Sale deleted: $saleId', name: 'Sales');
+    } catch (e) {
+      log('Error deleting sale: $e', name: 'Sales');
+      rethrow;
     }
-
-    log('Sale updated: $saleId', name: 'Sales');
-  } catch (e) {
-    log('Error editing sale (single-arg): $e', name: 'Sales');
-    rethrow;
   }
-}
+
+  Future<void> editSale(Map<String, dynamic> updatedSale) async {
+    try {
+      final saleId =
+          (updatedSale['id'] ?? updatedSale['saleId'] ?? '').toString();
+      if (saleId.isEmpty) {
+        log('editSale: missing sale id in map', name: 'Sales');
+        return;
+      }
+
+      final dataToUpdate = {...updatedSale}..remove('id');
+      dataToUpdate['updatedAt'] = FieldValue.serverTimestamp();
+
+      await firestore.collection('sales').doc(saleId).update(dataToUpdate);
+
+      final idx = _sales.indexWhere((s) => s['id'] == saleId);
+      if (idx != -1) {
+        _sales[idx] = {
+          ..._sales[idx],
+          ...updatedSale,
+          'id': saleId,
+        };
+        notifyListeners();
+      } else {
+        await fetchSales();
+      }
+
+      log('Sale updated: $saleId', name: 'Sales');
+    } catch (e) {
+      log('Error editing sale (single-arg): $e', name: 'Sales');
+      rethrow;
+    }
+  }
 
   // --------- Utility ---------
   List<String> getAssignedShopsForUser(String userId) {
@@ -1793,5 +2248,218 @@ Future<void> editSale(Map<String, dynamic> updatedSale) async {
     }
 
     return list.map((e) => e.toString()).toList();
+  }
+
+  /// ====== Goal-4: Payments (already used by UI) ======
+  Future<List<Map<String, dynamic>>> fetchWholesalerPaymentsBetween({
+    required DateTime from,
+    required DateTime to,
+    String? shopName, // null or 'All' => all
+    String? wholesalerName, // optional
+  }) async {
+    var q = firestore
+        .collection('payments')
+        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(from))
+        .where('createdAt', isLessThan: Timestamp.fromDate(to));
+
+    if (shopName != null && shopName != 'All') {
+      q = q.where('shopName', isEqualTo: shopName);
+    }
+    if (wholesalerName != null && wholesalerName.isNotEmpty) {
+      q = q.where('toWholesalerName', isEqualTo: wholesalerName);
+    }
+
+    final snap = await q.get();
+    return snap.docs.map((d) {
+      final m = d.data();
+      final ts = m['createdAt'];
+      final created = ts is Timestamp ? ts.toDate() : DateTime.now();
+      return {
+        'id': d.id,
+        'shopName': m['shopName'] ?? '',
+        'toWholesalerName': m['toWholesalerName'] ?? '',
+        'amount': (m['amount'] ?? 0).toDouble(),
+        'note': m['note'] ?? '',
+        'createdAt': created,
+      };
+    }).toList();
+  }
+
+
+Future<List<Map<String, dynamic>>> fetchWholesalerInvoicesByName({
+  required DateTime from,
+  required DateTime to,
+  String? shopName,
+  required String wholesalerName,
+}) async {
+  var q = firestore.collection('orders')
+    .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(from))
+    .where('createdAt', isLessThan: Timestamp.fromDate(to))
+    .where('wholesalerName', isEqualTo: wholesalerName);
+  if (shopName != null && shopName != 'All') {
+    q = q.where('shopName', isEqualTo: shopName);
+  }
+  final snap = await q.get();
+  return snap.docs.map((d) {
+    final m = d.data();
+    final ts = m['createdAt'];
+    final created = ts is Timestamp
+        ? ts.toDate()
+        : (ts is DateTime ? ts : DateTime.tryParse('$ts'));
+    return {
+      'id': d.id,
+      'shopName': m['shopName'] ?? m['shop'] ?? '',
+      'wholesalerName': m['wholesalerName'] ?? '',
+      'amount': (m['amount'] ?? m['invoiceAmount'] ?? 0).toDouble(),
+      'status': m['status'] ?? 'Pending',
+      'invoiceUrl': m['invoiceUrl'] ?? '',
+      'createdAt': created,
+    };
+  }).toList();
+}
+
+Future<List<Map<String, dynamic>>> fetchWholesalerPaymentsByName({
+  required DateTime from,
+  required DateTime to,
+  String? shopName,
+  required String wholesalerName,
+}) async {
+  var q = firestore.collection('payments')
+    .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(from))
+    .where('createdAt', isLessThan: Timestamp.fromDate(to))
+    .where('toWholesalerName', isEqualTo: wholesalerName);
+  if (shopName != null && shopName != 'All') {
+    q = q.where('shopName', isEqualTo: shopName);
+  }
+  final snap = await q.get();
+  return snap.docs.map((d) {
+    final m = d.data();
+    final ts = m['createdAt'];
+    final created = ts is Timestamp
+        ? ts.toDate()
+        : (ts is DateTime ? ts : DateTime.tryParse('$ts'));
+    return {
+      'id': d.id,
+      'shopName': m['shopName'] ?? '',
+      'toWholesalerName': m['toWholesalerName'] ?? '',
+      'amount': (m['amount'] ?? 0).toDouble(),
+      'note': m['note'] ?? '',
+      'createdAt': created,
+    };
+  }).toList();
+}
+
+Future<void> updateEmployeeExpenseEntry({
+  required String id,
+  required double amount,
+  required String type, // salary | advance | paid
+  String? note,
+}) async {
+  await firestore.collection('employee_expenses').doc(id).update({
+    'amount': amount,
+    'type': type,
+    'note': note ?? '',
+    'updatedAt': FieldValue.serverTimestamp(),
+  });
+}
+
+Future<void> deleteEmployeeExpenseEntry(String id) async {
+  await firestore.collection('employee_expenses').doc(id).delete();
+}
+
+
+  /// ====== Goal-4: One-call aggregator (for AllShopsSummaryScreen) ======
+  Future<AllShopsSummary> loadAllShopsSummary({
+    required String viewMode, // 'Daily' | 'Weekly' | 'Monthly' | 'Yearly'
+    required DateTime anchor,
+    String shopName = 'All',
+    bool includeOrdersSnapshotForDay = true,
+  }) async {
+    if (!isAdmin && !isManager) {
+      final r = rangeForView(viewMode, anchor);
+      return AllShopsSummary(range: r, filterShopName: shopName, perShop: {});
+    }
+
+    final range = rangeForView(viewMode, anchor);
+
+    final sales = await fetchSalesBetween(
+        from: range.from, to: range.to, shopName: shopName);
+    final invoices = await fetchWholesalerInvoices(
+        from: range.from, to: range.to, shopName: shopName);
+    final pays = await fetchWholesalerPaymentsBetween(
+        from: range.from, to: range.to, shopName: shopName);
+    final empExpenses = await fetchEmployeeExpenses(
+        from: range.from, to: range.to, shopName: shopName);
+    final othExpenses = await fetchOtherExpenses(
+        from: range.from, to: range.to, shopName: shopName);
+
+    final Set<String> shopSet = {};
+    void addShopIfPresent(String? n) {
+      if (n != null && n.isNotEmpty) shopSet.add(n);
+    }
+
+    for (final s in sales) addShopIfPresent(s['shop']);
+    for (final i in invoices) addShopIfPresent(i['shopName']);
+    for (final p in pays) addShopIfPresent(p['shopName']);
+    for (final e in empExpenses) addShopIfPresent(e['shopName']);
+    for (final e in othExpenses) addShopIfPresent(e['shopName']);
+
+    if (shopName != 'All' && shopName.isNotEmpty) {
+      shopSet.add(shopName);
+    }
+
+    final Map<String, ShopSummary> perShop = {};
+
+    for (final sName in shopSet) {
+      double cash = 0, card = 0, other = 0;
+      for (final s in sales.where((x) => (x['shop'] ?? '') == sName)) {
+        cash += (s['cash'] ?? 0).toDouble();
+        card += (s['card'] ?? 0).toDouble();
+        other += (s['other'] ?? 0).toDouble();
+      }
+
+      double invTotal = 0;
+      for (final inv
+          in invoices.where((x) => (x['shopName'] ?? '') == sName)) {
+        invTotal += (inv['amount'] ?? 0).toDouble();
+      }
+
+      double paidTotal = 0;
+      for (final p in pays.where((x) => (x['shopName'] ?? '') == sName)) {
+        paidTotal += (p['amount'] ?? 0).toDouble();
+      }
+
+      double empTotal = 0;
+      for (final e
+          in empExpenses.where((x) => (x['shopName'] ?? '') == sName)) {
+        empTotal += (e['amount'] ?? 0).toDouble();
+      }
+
+      double othTotal = 0;
+      for (final e
+          in othExpenses.where((x) => (x['shopName'] ?? '') == sName)) {
+        othTotal += (e['amount'] ?? 0).toDouble();
+      }
+
+      List<Map<String, dynamic>> dayOrders = const [];
+      if (includeOrdersSnapshotForDay && viewMode == 'Daily') {
+        dayOrders = await fetchOrdersForDate(shopName: sName, date: range.from);
+      }
+
+      perShop[sName] = ShopSummary(
+        shopName: sName,
+        cash: _round2(cash),
+        card: _round2(card),
+        other: _round2(other),
+        wholesalerInvoiceTotal: _round2(invTotal),
+        wholesalerPaidTotal: _round2(paidTotal),
+        employeeExpenseTotal: _round2(empTotal),
+        otherExpenseTotal: _round2(othTotal),
+        orders: dayOrders,
+      );
+    }
+
+    return AllShopsSummary(
+        range: range, filterShopName: shopName, perShop: perShop);
   }
 }

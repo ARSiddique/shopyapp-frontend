@@ -1,9 +1,9 @@
-// lib/main.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:provider/provider.dart';
+import 'package:intl/date_symbol_data_local.dart';
 
 import 'providers/app_data_provider.dart';
 import 'providers/theme_provider.dart';
@@ -11,14 +11,14 @@ import 'theme/app_theme.dart';
 import 'screens/splash_screen.dart';
 
 Future<void> main() async {
-  // Make sure bindings + Firebase init happen in the SAME zone.
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize Firebase (Android/iOS use google-services files)
+  // US date symbols (for en_US formatting everywhere)
+  await initializeDateFormatting('en_US');
+
   try {
     await Firebase.initializeApp();
   } catch (e, st) {
-    // Visible in debug console only
     // ignore: avoid_print
     print('🔥 Firebase init failed: $e\n$st');
   }
@@ -26,7 +26,11 @@ Future<void> main() async {
   runApp(
     MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => AppDataProvider()..restoreSession()),
+        ChangeNotifierProvider(
+          create: (_) => AppDataProvider()
+            ..restoreSession()
+            ..startFirebaseListeners(), // live sync on
+        ),
         ChangeNotifierProvider(create: (_) => ThemeProvider()),
       ],
       child: const MyApp(),
