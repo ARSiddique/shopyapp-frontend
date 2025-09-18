@@ -1,36 +1,20 @@
+<!-- android/app/src/main/AndroidManifest.xml -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools"
     package="com.ars.shopyapp">
 
-    <!-- Network -->
+    <!-- Required -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- Storage (legacy APIs only up to Android 9/10) -->
-    <uses-permission
-        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="28" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-
-    <!-- Android 11+ (scoped storage ka bypass — Play Store par special permission chahiye) -->
-    <!-- Agar zaroori na ho to isey hata den -->
-    <uses-permission
-        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
-        tools:ignore="ScopedStorage" />
-
-    <!-- Android 13+ media specific permissions -->
+    <!-- If you pick images from gallery on Android 13+ -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
-    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
 
-    <!-- (Optional) Android 13+ notifications -->
+    <!-- (Optional) If you actually show notifications on Android 13+ -->
     <!-- <uses-permission android:name="android.permission.POST_NOTIFICATIONS" /> -->
 
     <application
         android:name="${applicationName}"
         android:label="Shopy App"
-        android:icon="@mipmap/ic_launcher"
-        android:requestLegacyExternalStorage="true"
-        android:usesCleartextTraffic="true">
+        android:icon="@mipmap/ic_launcher">
 
         <activity
             android:name=".MainActivity"
@@ -56,12 +40,4 @@
             android:name="flutterEmbedding"
             android:value="2" />
     </application>
-
-    <!-- Optional: for PROCESS_TEXT queries -->
-    <queries>
-        <intent>
-            <action android:name="android.intent.action.PROCESS_TEXT" />
-            <data android:mimeType="text/plain" />
-        </intent>
-    </queries>
 </manifest>

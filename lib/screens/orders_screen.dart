@@ -27,6 +27,9 @@ class _OrdersScreenState extends State<OrdersScreen> {
   String? _wholesalerFilter;
   final _dateFmt = DateFormat('dd MMM, hh:mm a');
 
+  // 👇 NEW: ensure per-visit prompt only once (per push)
+  bool _didPromptShop = false;
+
   Future<void> _safeRun(Future<void> Function() fn) async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -64,24 +67,90 @@ class _OrdersScreenState extends State<OrdersScreen> {
   void initState() {
     super.initState();
     _wholesalerFilter = widget.focusWholesaler;
+    // NOTE: fetchOrders ab didChangeDependencies ke baad, shop select hone ke turant baad call hoga.
+  }
+
+  // ✅ NEW: Har visit par Admin/Manager se shop choose karwayo, warna screen se back
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_didPromptShop) return;
+    _didPromptShop = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      final app = context.read<AppDataProvider>();
-      final role = (app.loggedInUser?['role'] ?? '')
-          .toString()
-          .toLowerCase()
-          .trim();
-
-      // Admin/Manager → force shop selection if empty
-      if ((role == 'admin' || role == 'manager') &&
-          (app.selectedShopName == null || app.selectedShopName!.isEmpty)) {
-        await _ensureShopSelected(context);
-      }
-
-      await app.fetchOrders();
+      await _promptShopEachVisit();         // force picker for admin/manager
+      if (!mounted) return;
+      await context.read<AppDataProvider>().fetchOrders(); // then load
     });
   }
 
-  // ---- inline shop picker (bottom sheet) ----
+  // ---- NEW: Always prompt for Admin/Manager (even if selectedShop set) ----
+  Future<void> _promptShopEachVisit() async {
+    final app = context.read<AppDataProvider>();
+    final user = app.loggedInUser ?? {};
+    final role = (user['role'] ?? '').toString().toLowerCase().trim();
+
+    // Sirf admin/manager ko force prompt
+    if (role != 'admin' && role != 'manager') return;
+
+    final shopsAll = app.shops.where((s) => (s['isDeleted'] ?? false) != true).toList();
+
+    if (shopsAll.isEmpty) {
+      if (!mounted) return;
+      await showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('No Shops'),
+          content: const Text('Please add a shop first.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK')),
+          ],
+        ),
+      );
+      if (mounted) Navigator.pop(context); // exit Orders screen
+      return;
+    }
+
+    final current = app.selectedShopName;
+
+    final chosen = await showModalBottomSheet<Map<String, String>>(
+      context: context,
+      isScrollControlled: false,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => SafeArea(
+        child: ListView.separated(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          itemCount: shopsAll.length,
+          separatorBuilder: (_, __) => const Divider(height: 1),
+          itemBuilder: (_, i) {
+            final s = shopsAll[i];
+            final id = (s['id'] ?? s['docId'] ?? '').toString();
+            final name = (s['name'] ?? 'Unnamed').toString();
+            final selected = name == current;
+            return ListTile(
+              leading: const Icon(Icons.store),
+              title: Text(name),
+              trailing: selected ? const Icon(Icons.check) : null,
+              onTap: () => Navigator.pop(context, {'id': id, 'name': name}),
+            );
+          },
+        ),
+      ),
+    );
+
+    if (!mounted) return;
+
+    if (chosen == null) {
+      // Cancel kiya → Orders se back
+      Navigator.pop(context);
+      return;
+    }
+
+    app.setSelectedShop(chosen['id']!, chosen['name']!);
+  }
+
+  // ---- (kept) inline shop picker for Add Order fallback if somehow empty) ----
   Future<void> _ensureShopSelected(BuildContext context) async {
     final app = context.read<AppDataProvider>();
     if ((app.selectedShopName ?? '').isNotEmpty) return;

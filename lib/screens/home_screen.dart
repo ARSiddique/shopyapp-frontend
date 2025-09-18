@@ -438,9 +438,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Selected shop chip + change
-                          if (selectedShop != null &&
-                              selectedShop.isNotEmpty) ...[
+                          // ------------------------------------------------------
+                          // SHOP SELECTION UI — HIDDEN (commented out intentionally)
+                          /*
+                          if (selectedShop != null && selectedShop.isNotEmpty) ...[
                             Row(
                               children: [
                                 Chip(
@@ -461,18 +462,19 @@ class _HomeScreenState extends State<HomeScreen> {
                               alignment: Alignment.centerLeft,
                               child: OutlinedButton.icon(
                                 onPressed: _showShopSelector,
-                                icon:
-                                    const Icon(Icons.store_mall_directory),
+                                icon: const Icon(Icons.store_mall_directory),
                                 label: const Text('Select shop'),
                               ),
                             ),
                             const SizedBox(height: 8),
                           ],
+                          */
+                          // ------------------------------------------------------
 
                           // ---------- Goal-4 Quick Actions (Admin/Manager) ----------
                           if (!isEmployee) ...[
                             const Text(
-                              'Goal-4: Quick Actions',
+                              'Quick Actions',
                               style: TextStyle(
                                   fontSize: 16, fontWeight: FontWeight.bold),
                             ),

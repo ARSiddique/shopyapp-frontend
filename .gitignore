@@ -80,3 +80,6 @@ key.properties
 # ----------------------------
 lib/utils/logger.dart
 lib/utils/shop_metrics_helper.dart
+android/key.properties
+android/app/upload-keystore.jks
+
