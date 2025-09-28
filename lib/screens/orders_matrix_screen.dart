@@ -1,116 +1,246 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+
 import '../providers/app_data_provider.dart';
+import 'pull_all_shop_orders_screen.dart';
+
+const double _kCellHeight = 56;
 
 class OrdersMatrixScreen extends StatefulWidget {
   const OrdersMatrixScreen({super.key});
+
   @override
   State<OrdersMatrixScreen> createState() => _OrdersMatrixScreenState();
 }
 
 class _OrdersMatrixScreenState extends State<OrdersMatrixScreen> {
-  DateTime anchor = DateTime.now();
+  DateTime _anchor = DateTime.now();
+  bool _loading = true;
+
+  // wholesaler paging (show one column like PPT/screenshot)
+  int _whIndex = 0;
+  List<String> _wholesalers = const [];
+
+  // matrix[shop][wholesaler] = {...}
+  Map<String, Map<String, Map<String, dynamic>>> _matrix = {};
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _prime());
+  }
+
+  Future<void> _prime() async {
+    final app = context.read<AppDataProvider>();
+    await app.fetchShops();
+    await app.fetchWholesalers();
+
+    // Make simple list of names
+    _wholesalers = app.wholesalers.map((w) => (w['name'] ?? '').toString()).toList();
+    if (_wholesalers.isEmpty) _wholesalers = ['—']; // placeholder
+
+    await _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    final app = context.read<AppDataProvider>();
+    final selectedWh = _wholesalers[_whIndex];
+    _matrix = await app.ordersMatrixForDate(
+      date: DateTime(_anchor.year, _anchor.month, _anchor.day),
+      wholesalersFilter: selectedWh == '—' ? null : [selectedWh],
+    );
+    if (!mounted) return;
+    setState(() => _loading = false);
+  }
+
+  Future<void> _shiftDay(int delta) async {
+    setState(() => _anchor = _anchor.add(Duration(days: delta)));
+    await _load();
+  }
+
+  void _prevWh() async {
+    if (_wholesalers.isEmpty) return;
+    setState(() => _whIndex = (_whIndex - 1) % _wholesalers.length);
+    await _load();
+  }
+
+  void _nextWh() async {
+    if (_wholesalers.isEmpty) return;
+    setState(() => _whIndex = (_whIndex + 1) % _wholesalers.length);
+    await _load();
+  }
 
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppDataProvider>();
+    final shopsList = [
+      ...app.shops.map((s) => (s['name'] ?? '').toString()),
+      ..._matrix.keys, // ensure any shops with orders but not in shops collection
+    ].toSet().toList()
+      ..sort((a, b) => a.toString().toLowerCase().compareTo(b.toString().toLowerCase()));
+
+    final dateStr = DateFormat('MMMM d, yyyy').format(_anchor);
+    final whName = _wholesalers.isEmpty ? '' : _wholesalers[_whIndex];
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Orders – Daily Matrix'),
-        actions: [
-          IconButton(onPressed: ()=>setState(()=>anchor = anchor.subtract(const Duration(days: 1))), icon: const Icon(Icons.chevron_left)),
-          Center(child: Text(DateFormat('MMM dd, yyyy').format(anchor))),
-          IconButton(onPressed: ()=>setState(()=>anchor = anchor.add(const Duration(days: 1))), icon: const Icon(Icons.chevron_right)),
-        ],
+      appBar: AppBar(title: const Text('Orders Matrix')),
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+          child: SizedBox(
+            height: 56,
+            child: ElevatedButton.icon(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => PullAllShopOrdersScreen(date: _anchor)),
+                );
+              },
+              icon: const Icon(Icons.list_alt_rounded),
+              label: const Text('Pull all shop orders'),
+            ),
+          ),
+        ),
       ),
-      body: FutureBuilder(
-        future: Future.wait([
-          app.ordersMatrixForDate(date: anchor),
-          app.fetchWholesalers(), // ensures list is fresh
-        ]),
-        builder: (ctx, snap) {
-          if (!snap.hasData) return const Center(child: CircularProgressIndicator());
-          final matrix = (snap.data as List).first as Map<String, Map<String, Map<String, dynamic>>>;
-          final cols = app.wholesalers.map((w)=> w['name'].toString()).toList();
-
-          // header
-          final header = Row(
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+          child: Column(
             children: [
-              _cell('Shop', bold: true, flex: 2),
-              ...cols.map((c)=>_cell(c, bold: true)),
+              // date nav
+              Row(
+                children: [
+                  _pillBtn('Prev', onTap: () => _shiftDay(-1)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Container(
+                      height: 44,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.green),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(dateStr, style: const TextStyle(fontWeight: FontWeight.w600)),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _pillBtn('Next', onTap: () => _shiftDay(1)),
+                ],
+              ),
+              const SizedBox(height: 12),
+
+              // header row: Shop | wholesaler selector (prev/next)
+              Row(
+                children: [
+                  Expanded(child: _headerCell('Shop')),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Row(
+                      children: [
+                        Expanded(child: _headerCell(whName.isEmpty ? 'Wholesaler' : whName)),
+                        const SizedBox(width: 6),
+                        _squareIconBtn(Icons.chevron_left, _prevWh),
+                        const SizedBox(width: 6),
+                        _squareIconBtn(Icons.chevron_right, _nextWh),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+
+              Expanded(
+                child: _loading
+                    ? const Center(child: CircularProgressIndicator())
+                    : ListView.separated(
+                        itemCount: shopsList.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 10),
+                        itemBuilder: (_, i) {
+                          final shop = shopsList[i];
+                          final has = _matrix[shop] != null &&
+                              _matrix[shop]![whName] != null;
+                          return Row(
+                            children: [
+                              Expanded(child: _cell(text: shop)),
+                              const SizedBox(width: 10),
+                              Expanded(child: _cellIcon(has)),
+                            ],
+                          );
+                        },
+                      ),
+              ),
             ],
-          );
-
-          // rows
-          final shopNames = matrix.keys.toList()..sort();
-          final rows = shopNames.map((s){
-            return Row(
-              children: [
-                _cell(s, bold: true, flex: 2),
-                ...cols.map((wh){
-                  final cell = matrix[s]?[wh];
-                  if (cell == null) return _cell('');
-                  final ok = cell['status'] != 'Pending' ? Icons.check_circle : Icons.check_circle_outline;
-                  return _cellWidget(Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(ok, size: 18),
-                      const SizedBox(width: 4),
-                      Text((cell['amount'] as num).toStringAsFixed(0)),
-                    ],
-                  ));
-                }),
-              ],
-            );
-          }).toList();
-
-          return ListView(
-            padding: const EdgeInsets.all(8),
-            children: [header, const Divider(), ...rows],
-          );
-        },
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          final pulled = await app.pullAllShopOrdersForDate(date: anchor);
-          if (!mounted) return;
-          showModalBottomSheet(context: context, builder: (_) {
-            final keys = pulled.keys.toList()..sort();
-            return ListView(
-              padding: const EdgeInsets.all(12),
-              children: keys.map((wh){
-                final items = pulled[wh]!;
-                final kids = items.map((e)=> ListTile(
-                  dense: true,
-                  title: Text(e['shopName']),
-                  trailing: Text('\$${(e['amount'] as num).toStringAsFixed(0)}'),
-                  subtitle: Text(e['status']),
-                ));
-                return ExpansionTile(title: Text(wh), children: kids.toList());
-              }).toList(),
-            );
-          });
-        },
-        label: const Text('Pull all shop orders'),
-        icon: const Icon(Icons.view_list),
+          ),
+        ),
       ),
     );
   }
 
-  Widget _cell(String text, {bool bold = false, int flex = 1}) =>
-      Expanded(flex: flex, child: Container(
-        padding: const EdgeInsets.all(8),
-        margin: const EdgeInsets.all(2),
-        decoration: BoxDecoration(border: Border.all(color: Colors.black12), borderRadius: BorderRadius.circular(6)),
-        child: Text(text, textAlign: TextAlign.center, style: TextStyle(fontWeight: bold? FontWeight.w700 : FontWeight.w500)),
-      ));
+  Widget _pillBtn(String label, {required VoidCallback onTap}) {
+    return SizedBox(
+      height: 44,
+      child: ElevatedButton(
+        onPressed: onTap,
+        style: ElevatedButton.styleFrom(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+        child: Text(label),
+      ),
+    );
+  }
 
-  Widget _cellWidget(Widget child, {int flex = 1}) =>
-      Expanded(flex: flex, child: Container(
-        padding: const EdgeInsets.all(8),
-        margin: const EdgeInsets.all(2),
-        decoration: BoxDecoration(border: Border.all(color: Colors.black12), borderRadius: BorderRadius.circular(6)),
-        child: Center(child: child),
-      ));
+  Widget _headerCell(String text) {
+    return Container(
+      height: _kCellHeight,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.green),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(text, style: const TextStyle(fontWeight: FontWeight.w700)),
+    );
+  }
+
+  Widget _cell({required String text}) {
+    return Container(
+      height: _kCellHeight,
+      alignment: Alignment.centerLeft,
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.green),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(text),
+    );
+  }
+
+  Widget _cellIcon(bool hasOrder) {
+    final icon = hasOrder ? Icons.check_circle : Icons.cancel_rounded;
+    final color = hasOrder ? Colors.green : Colors.grey;
+    return Container(
+      height: _kCellHeight,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.green),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Icon(icon, color: color),
+    );
+  }
+
+  Widget _squareIconBtn(IconData icon, VoidCallback onTap) {
+    return SizedBox(
+      width: 44,
+      height: 44,
+      child: OutlinedButton(
+        onPressed: onTap,
+        style: OutlinedButton.styleFrom(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
+        child: Icon(icon),
+      ),
+    );
+  }
 }

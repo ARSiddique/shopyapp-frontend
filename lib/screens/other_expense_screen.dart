@@ -3,6 +3,8 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_data_provider.dart';
 
+const double _kRowHeight = 56;
+
 class OtherExpenseScreen extends StatefulWidget {
   const OtherExpenseScreen({super.key});
 
@@ -11,85 +13,65 @@ class OtherExpenseScreen extends StatefulWidget {
 }
 
 class _OtherExpenseScreenState extends State<OtherExpenseScreen> {
-  final _df = DateFormat('MMM d, yyyy', 'en_US');
-
-  String _view = 'Monthly';
   DateTime _anchor = DateTime.now();
-  String? _shopFilter;
+  bool _loading = true;
+  List<Map<String, dynamic>> _items = const [];
+  double _total = 0;
 
-  bool _loading = false;
-  List<Map<String, dynamic>> _rows = [];
-
-  (DateTime from, DateTime to) _range() {
-    final a = DateTime(_anchor.year, _anchor.month, _anchor.day);
-    switch (_view) {
-      case 'Daily':
-        return (a, a.add(const Duration(days: 1)));
-      case 'Weekly':
-        final start = a.subtract(Duration(days: a.weekday - 1)); // Monday
-        return (start, start.add(const Duration(days: 7)));
-      case 'Yearly':
-        return (DateTime(a.year, 1, 1), DateTime(a.year + 1, 1, 1));
-      case 'Monthly':
-      default:
-        return (DateTime(a.year, a.month, 1), DateTime(a.year, a.month + 1, 1));
-    }
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
   Future<void> _load() async {
     setState(() => _loading = true);
     final app = context.read<AppDataProvider>();
-    final (from, to) = _range();
+    final start = DateTime(_anchor.year, _anchor.month, 1);
+    final end = DateTime(_anchor.year, _anchor.month + 1, 1);
 
     final list = await app.fetchOtherExpenses(
-      from: from,
-      to: to,
-      shopName: _shopFilter,
+      from: start,
+      to: end,
+      shopName: null, // ← no shop filter
+    );
+
+    final sum = list.fold<double>(
+      0.0,
+      (s, e) => s + ((e['amount'] as num?)?.toDouble() ?? 0.0),
     );
 
     if (!mounted) return;
     setState(() {
-      _rows = list;
+      _items = list;
+      _total = sum;
       _loading = false;
     });
   }
 
-  String _fmt(num v) =>
-      NumberFormat.currency(locale: 'en_US', symbol: r'$').format(v);
+  Future<void> _shiftMonth(int delta) async {
+    setState(() {
+      _anchor = DateTime(_anchor.year, _anchor.month + delta, 1);
+    });
+    await _load();
+  }
 
   Future<void> _addExpenseDialog() async {
-    final app = context.read<AppDataProvider>();
-    final shops = app.shops
-        .map((s) => (s['name'] ?? s['shopName'] ?? '').toString())
-        .where((e) => e.isNotEmpty)
-        .toList();
-
-    String? shop = _shopFilter ?? (shops.isNotEmpty ? shops.first : null);
-    final titleCtl = TextEditingController(text: 'Expense');
+    final titleCtl = TextEditingController();
     final amountCtl = TextEditingController();
-    final noteCtl = TextEditingController();
+    DateTime picked = DateTime.now();
 
-    final ok = await showDialog<bool>(
+    await showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('Add Other Expense'),
+        title: const Text('Add other expense'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            DropdownButtonFormField<String>(
-              value: shop,
-              items: shops
-                  .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-                  .toList(),
-              onChanged: (v) => shop = v,
-              decoration: const InputDecoration(labelText: 'Shop'),
-            ),
-            const SizedBox(height: 8),
             TextField(
               controller: titleCtl,
-              decoration: const InputDecoration(labelText: 'Category / Title'),
+              decoration: const InputDecoration(labelText: 'Title'),
             ),
-            const SizedBox(height: 8),
             TextField(
               controller: amountCtl,
               keyboardType:
@@ -97,185 +79,158 @@ class _OtherExpenseScreenState extends State<OtherExpenseScreen> {
               decoration: const InputDecoration(labelText: 'Amount'),
             ),
             const SizedBox(height: 8),
-            TextField(
-              controller: noteCtl,
-              decoration:
-                  const InputDecoration(labelText: 'Note (optional)'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Save')),
-        ],
-      ),
-    );
-
-    if (ok == true && shop != null) {
-      final amt = double.tryParse(amountCtl.text.trim()) ?? 0;
-      if (amt <= 0) return;
-
-      // Provider already has addExpense()
-      await app.addExpense(
-        shopName: shop!,
-        amount: amt,
-        category: titleCtl.text.trim(),
-        note: noteCtl.text.trim(),
-      );
-      await _load();
-    }
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final app = context.watch<AppDataProvider>();
-    final (from, to) = _range();
-
-    final shopNames = <String>[
-      'All',
-      ...app.shops
-          .map((s) => (s['name'] ?? s['shopName'] ?? '').toString())
-          .where((e) => e.isNotEmpty)
-          .toSet(),
-    ];
-
-    final total = _rows.fold<num>(
-        0, (s, e) => s + ((e['amount'] as num?) ?? 0));
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Other Expense'),
-        actions: [
-          IconButton(onPressed: _loading ? null : _load, icon: const Icon(Icons.refresh)),
-          const SizedBox(width: 8),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _addExpenseDialog,
-        icon: const Icon(Icons.add),
-        label: const Text('Add'),
-      ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Wrap(
-              spacing: 12,
-              runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
+            Row(
               children: [
-                DropdownButton<String>(
-                  value: _view,
-                  items: const ['Daily', 'Weekly', 'Monthly', 'Yearly']
-                      .map((e) => DropdownMenuItem(value: e, child: Text(e)))
-                      .toList(),
-                  onChanged: (v) {
-                    if (v == null) return;
-                    setState(() => _view = v);
-                    _load();
-                  },
-                ),
-                OutlinedButton(
+                const Text('Date:'),
+                const SizedBox(width: 8),
+                Text(DateFormat('yyyy-MM-dd').format(picked)),
+                const Spacer(),
+                TextButton(
                   onPressed: () async {
                     final d = await showDatePicker(
                       context: context,
-                      initialDate: _anchor,
+                      initialDate: picked,
                       firstDate: DateTime(2020),
                       lastDate: DateTime(2100),
                     );
                     if (d != null) {
-                      setState(() => _anchor = d);
-                      _load();
+                      picked = d;
+                      if (mounted) setState(() {});
                     }
                   },
-                  child: Text(
-                      '${_df.format(from)} → ${_df.format(to.subtract(const Duration(days: 1)))}'),
-                ),
-                DropdownButton<String>(
-                  value: _shopFilter ?? 'All',
-                  items: shopNames
-                      .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-                      .toList(),
-                  onChanged: (v) {
-                    setState(() => _shopFilter = (v == 'All') ? null : v);
-                    _load();
-                  },
-                ),
+                  child: const Text('Pick'),
+                )
               ],
             ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              final title = titleCtl.text.trim();
+              final amount = double.tryParse(amountCtl.text.trim()) ?? 0.0;
+              if (title.isEmpty || amount <= 0) return;
+
+              await context.read<AppDataProvider>().addOtherExpenseEntry(
+                    shopName: '', // not used
+                    amount: amount,
+                    title: title,
+                    when: picked,
+                  );
+              if (!mounted) return;
+              Navigator.pop(context);
+              await _load();
+            },
+            child: const Text('Save'),
           ),
-          const Divider(height: 0),
-          if (_loading)
-            const Expanded(child: Center(child: CircularProgressIndicator()))
-          else
-            Expanded(
-              child: ListView(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Row(
-                      children: [
-                        _metric('Total Expense',
-                            NumberFormat.currency(locale: 'en_US', symbol: r'$')
-                                .format(total),
-                            emphasize: true),
-                      ],
-                    ),
-                  ),
-                  ..._rows.map((e) {
-                    final when = e['createdAt'] as DateTime? ??
-                        DateTime.tryParse('${e['createdAt']}');
-                    return ListTile(
-                      leading: const Icon(Icons.receipt_long),
-                      title: Text(
-                          '${(e['title'] ?? 'Expense')}  •  ${(e['shopName'] ?? '-')}'),
-                      subtitle: Text(
-                          '${when != null ? _df.format(when) : ''}${(e['note'] ?? '').toString().isNotEmpty ? '  •  ${e['note']}' : ''}'),
-                      trailing: Text(
-                        NumberFormat.currency(locale: 'en_US', symbol: r'$')
-                            .format((e['amount'] as num?) ?? 0),
-                        style: const TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                    );
-                  }),
-                  const SizedBox(height: 12),
-                ],
-              ),
-            ),
         ],
       ),
     );
   }
 
-  Widget _metric(String title, String value, {bool emphasize = false}) {
-    final base = emphasize ? Colors.blue : Colors.grey;
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        margin: const EdgeInsets.symmetric(horizontal: 6),
-        decoration: BoxDecoration(
-          color: base.withOpacity(0.08),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.black12),
+  @override
+  Widget build(BuildContext context) {
+    final monthStr = DateFormat('MMMM yyyy').format(_anchor);
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Other Expense')),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _addExpenseDialog,
+        child: const Icon(Icons.add),
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+      // full-width bottom total
+      bottomNavigationBar: SafeArea(child: _totalTile(_total)),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.chevron_left),
+                    onPressed: () => _shiftMonth(-1),
+                  ),
+                  Expanded(
+                    child: Container(
+                      height: 44,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.green),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(monthStr,
+                          style: const TextStyle(fontWeight: FontWeight.w600)),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.chevron_right),
+                    onPressed: () => _shiftMonth(1),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Expanded(
+                child: _loading
+                    ? const Center(child: CircularProgressIndicator())
+                    : _items.isEmpty
+                        ? const Center(child: Text('No expenses this month'))
+                        : ListView.separated(
+                            itemCount: _items.length,
+                            separatorBuilder: (_, __) =>
+                                const SizedBox(height: 10),
+                            itemBuilder: (_, i) {
+                              final m = _items[i];
+                              final title = (m['title'] ?? '').toString();
+                              final amount =
+                                  (m['amount'] as num?)?.toDouble() ?? 0.0;
+                              return Container(
+                                height: _kRowHeight,
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 14),
+                                decoration: BoxDecoration(
+                                  border: Border.all(color: Colors.green),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(child: Text(title)),
+                                    Text('\$${amount.toStringAsFixed(2)}'),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(title,
-                style: const TextStyle(fontSize: 12, color: Colors.black54)),
-            const SizedBox(height: 6),
-            Text(value,
-                style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: emphasize ? FontWeight.w800 : FontWeight.w700)),
-          ],
-        ),
+      ),
+    );
+  }
+
+  Widget _totalTile(double total) {
+    return Container(
+      width: double.infinity,
+      height: _kRowHeight, // same height as list rows
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.green),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          const Expanded(
+            child: Text('Total Expense',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+          Text('\$${total.toStringAsFixed(2)}',
+              style: const TextStyle(fontWeight: FontWeight.bold)),
+        ],
       ),
     );
   }

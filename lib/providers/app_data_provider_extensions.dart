@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../providers/app_data_provider.dart';
 
+
 extension RoleAndRangeHelpers on AppDataProvider {
   /// Normalizes role value safely from loggedInUser (case-insensitive).
   String get roleLower {

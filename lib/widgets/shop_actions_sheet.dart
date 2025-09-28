@@ -1,4 +1,3 @@
-// lib/widgets/shop_actions_sheet.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_data_provider.dart';
@@ -31,7 +30,6 @@ Future<void> showShopActions(BuildContext context, String shopName) async {
               Wrap(
                 spacing: 10, runSpacing: 10, children: [
 
-                  // Add Order → pick wholesaler → prefilled AddOrderScreen
                   _ActionChip(
                     icon: Icons.add_shopping_cart, label: 'Add Order',
                     onTap: () async {
@@ -48,7 +46,6 @@ Future<void> showShopActions(BuildContext context, String shopName) async {
                     },
                   ),
 
-                  // Admin/Manager only: Add Wholesaler inline (no new screen)
                   if (role == 'admin' || role == 'manager')
                     _ActionChip(
                       icon: Icons.person_add_alt_1, label: 'Add Wholesaler',
@@ -94,16 +91,14 @@ class _ActionChip extends StatelessWidget {
   }
 }
 
-// ---- helpers inside same file (reuse) ----
 Future<void> _startAddOrderFlow(BuildContext context, String shopName) async {
-  // 1) pick wholesaler
+  // pick wholesaler using picker-mode screen
   final selected = await Navigator.push<String>(
     context,
     MaterialPageRoute(builder: (_) => const WholesalersListScreen(selectMode: true)),
   );
-  if (selected == null || selected.trim().isEmpty) return;
+  if (!context.mounted || selected == null || selected.trim().isEmpty) return;
 
-  // 2) open AddOrder with prefilled params
   await Navigator.push(
     context,
     MaterialPageRoute(
@@ -153,7 +148,7 @@ Future<void> _showAddWholesalerDialog(BuildContext context) async {
               name: name, phone: phone, address: address,
             );
             if (!context.mounted) return;
-            Navigator.pop(context); // close dialog once
+            Navigator.pop(context);
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(content: Text(err == null ? 'Wholesaler added' : 'Failed: $err')),
             );

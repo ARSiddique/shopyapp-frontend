@@ -2,11 +2,10 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
-import 'package:cloud_firestore/cloud_firestore.dart' show Timestamp;
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../providers/app_data_provider.dart';
 import 'add_order_screen.dart';
-import 'wholesalers_list_screen.dart';
 
 class OrdersScreen extends StatefulWidget {
   const OrdersScreen({
@@ -14,21 +13,35 @@ class OrdersScreen extends StatefulWidget {
     this.initialStatusFilter = 'All',
     this.focusWholesaler,
   });
-  final String initialStatusFilter; // All | Pending | Forwarded | Received
+
+  /// UI filter: All | Ordered | Forwarded | Received
+  final String initialStatusFilter;
   final String? focusWholesaler;
 
   @override
   State<OrdersScreen> createState() => _OrdersScreenState();
 }
 
+enum _OrdersView { list, table }
+
 class _OrdersScreenState extends State<OrdersScreen> {
   bool _busy = false;
   late String _statusFilter = widget.initialStatusFilter;
   String? _wholesalerFilter;
   final _dateFmt = DateFormat('dd MMM, hh:mm a');
-
-  // 👇 NEW: ensure per-visit prompt only once (per push)
   bool _didPromptShop = false;
+
+  _OrdersView _view = _OrdersView.table; // default table
+  DateTime _tableDate = DateTime.now();
+
+  // ---------- helpers ----------
+  String _uiStatusOf(dynamic raw) {
+    final s = (raw ?? 'Pending').toString();
+    if (s == 'Received') return 'Received';
+    if (s == 'Forwarded') return 'Forwarded';
+    // treat Pending/Placed/Created/etc as Ordered
+    return 'Ordered';
+  }
 
   Future<void> _safeRun(Future<void> Function() fn) async {
     if (_busy) return;
@@ -48,10 +61,11 @@ class _OrdersScreenState extends State<OrdersScreen> {
   Future<void> _refresh(AppDataProvider app) => app.fetchOrders();
 
   List<Map<String, dynamic>> _applyFilter(List<Map<String, dynamic>> data) {
-    var out = data;
+    var out =
+        data.map((m) => {...m, 'uiStatus': _uiStatusOf(m['status'])}).toList();
     if (_statusFilter != 'All') {
       out = out
-          .where((o) => (o['status'] ?? 'Pending').toString() == _statusFilter)
+          .where((o) => (o['uiStatus'] as String) == _statusFilter)
           .toList();
     }
     if ((_wholesalerFilter ?? '').isNotEmpty) {
@@ -67,32 +81,33 @@ class _OrdersScreenState extends State<OrdersScreen> {
   void initState() {
     super.initState();
     _wholesalerFilter = widget.focusWholesaler;
-    // NOTE: fetchOrders ab didChangeDependencies ke baad, shop select hone ke turant baad call hoga.
+    // normalize initial for Pending/Placed → Ordered
+    _statusFilter =
+        _uiStatusOf(widget.initialStatusFilter) == 'Ordered'
+            ? 'Ordered'
+            : widget.initialStatusFilter;
   }
 
-  // ✅ NEW: Har visit par Admin/Manager se shop choose karwayo, warna screen se back
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     if (_didPromptShop) return;
     _didPromptShop = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await _promptShopEachVisit();         // force picker for admin/manager
+      await _promptShopEachVisit();
       if (!mounted) return;
-      await context.read<AppDataProvider>().fetchOrders(); // then load
+      await context.read<AppDataProvider>().fetchOrders();
     });
   }
 
-  // ---- NEW: Always prompt for Admin/Manager (even if selectedShop set) ----
+  // ---------- prompt/select shop ----------
   Future<void> _promptShopEachVisit() async {
     final app = context.read<AppDataProvider>();
-    final user = app.loggedInUser ?? {};
-    final role = (user['role'] ?? '').toString().toLowerCase().trim();
-
-    // Sirf admin/manager ko force prompt
+    final role = (app.loggedInUser?['role'] ?? '').toString().toLowerCase();
     if (role != 'admin' && role != 'manager') return;
 
-    final shopsAll = app.shops.where((s) => (s['isDeleted'] ?? false) != true).toList();
+    final shopsAll =
+        app.shops.where((s) => (s['isDeleted'] ?? false) != true).toList();
 
     if (shopsAll.isEmpty) {
       if (!mounted) return;
@@ -102,11 +117,13 @@ class _OrdersScreenState extends State<OrdersScreen> {
           title: const Text('No Shops'),
           content: const Text('Please add a shop first.'),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK')),
+            TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('OK')),
           ],
         ),
       );
-      if (mounted) Navigator.pop(context); // exit Orders screen
+      if (mounted) Navigator.pop(context);
       return;
     }
 
@@ -129,9 +146,11 @@ class _OrdersScreenState extends State<OrdersScreen> {
             final name = (s['name'] ?? 'Unnamed').toString();
             final selected = name == current;
             return ListTile(
-              leading: const Icon(Icons.store),
-              title: Text(name),
-              trailing: selected ? const Icon(Icons.check) : null,
+              leading: const Icon(Icons.store, color: Colors.white70),
+              title:
+                  Text(name, style: const TextStyle(color: Colors.white)),
+              trailing:
+                  selected ? const Icon(Icons.check, color: Colors.white) : null,
               onTap: () => Navigator.pop(context, {'id': id, 'name': name}),
             );
           },
@@ -140,17 +159,13 @@ class _OrdersScreenState extends State<OrdersScreen> {
     );
 
     if (!mounted) return;
-
     if (chosen == null) {
-      // Cancel kiya → Orders se back
       Navigator.pop(context);
       return;
     }
-
     app.setSelectedShop(chosen['id']!, chosen['name']!);
   }
 
-  // ---- (kept) inline shop picker for Add Order fallback if somehow empty) ----
   Future<void> _ensureShopSelected(BuildContext context) async {
     final app = context.read<AppDataProvider>();
     if ((app.selectedShopName ?? '').isNotEmpty) return;
@@ -170,11 +185,13 @@ class _OrdersScreenState extends State<OrdersScreen> {
             if (shops.isEmpty) {
               return const Padding(
                 padding: EdgeInsets.all(16),
-                child: Text('No shops to select.'),
+                child: Text('No shops to select.',
+                    style: TextStyle(color: Colors.white)),
               );
             }
             return ListView.separated(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               itemCount: shops.length,
               separatorBuilder: (_, __) => const Divider(height: 1),
               itemBuilder: (_, i) {
@@ -182,8 +199,9 @@ class _OrdersScreenState extends State<OrdersScreen> {
                 final id = (s['id'] ?? '').toString();
                 final name = (s['name'] ?? 'Unnamed').toString();
                 return ListTile(
-                  leading: const Icon(Icons.store),
-                  title: Text(name),
+                  leading: const Icon(Icons.store, color: Colors.white70),
+                  title:
+                      Text(name, style: const TextStyle(color: Colors.white)),
                   onTap: () {
                     Navigator.pop(context);
                     app.setSelectedShop(id, name);
@@ -197,30 +215,75 @@ class _OrdersScreenState extends State<OrdersScreen> {
     );
   }
 
-  // wholesaler → AddOrder
+  // Add Order flow (per-shop per day unique)
   Future<void> _startAddOrder(BuildContext context) async {
     final app = context.read<AppDataProvider>();
 
     if ((app.selectedShopName ?? '').isEmpty) {
       await _ensureShopSelected(context);
+      if (!mounted) return;
     }
     final shopName = app.selectedShopName ?? '';
     if (shopName.isEmpty) return;
 
-    final selected = await Navigator.push<String>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => const WholesalersListScreen(selectMode: true),
+    if (app.wholesalers.isEmpty) {
+      await app.fetchWholesalers();
+      if (!mounted) return;
+    }
+
+    final chosen = await showModalBottomSheet<String>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
+      builder: (_) {
+        final list = app.wholesalers;
+        if (list.isEmpty) {
+          return const Padding(
+            padding: EdgeInsets.all(16),
+            child: Text('No wholesalers found. Use + to add one.',
+                style: TextStyle(color: Colors.white)),
+          );
+        }
+        return SafeArea(
+          child: ListView.separated(
+            itemCount: list.length,
+            separatorBuilder: (_, __) => const Divider(height: 1),
+            itemBuilder: (_, i) {
+              final name = (list[i]['name'] ?? '').toString();
+              return ListTile(
+                leading:
+                    const Icon(Icons.local_shipping, color: Colors.white70),
+                title:
+                    Text(name, style: const TextStyle(color: Colors.white)),
+                onTap: () => Navigator.pop(context, name),
+              );
+            },
+          ),
+        );
+      },
     );
-    if (selected == null || selected.trim().isEmpty) return;
+    if (!mounted || chosen == null || chosen.trim().isEmpty) return;
+
+    // UI guard (shop+day unique)
+    final todayKey = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    final already = app.orders.any((o) =>
+        (o['shopName'] ?? o['shop']) == shopName &&
+        (o['dayKey'] ?? '') == todayKey);
+    if (already) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Aaj is shop ka order already mojood hai.')),
+      );
+      return;
+    }
 
     await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => AddOrderScreen(
           shopName: shopName,
-          wholesalerName: selected.trim(),
+          wholesalerName: chosen.trim(),
         ),
       ),
     );
@@ -235,17 +298,30 @@ class _OrdersScreenState extends State<OrdersScreen> {
     await showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('Add Wholesaler'),
+        backgroundColor: const Color(0xFF1A2433),
+        title:
+            const Text('Add Wholesaler', style: TextStyle(color: Colors.white)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Name')),
-            TextField(controller: phoneCtrl, decoration: const InputDecoration(labelText: 'Phone')),
-            TextField(controller: addrCtrl, decoration: const InputDecoration(labelText: 'Address')),
+            TextField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(labelText: 'Name'),
+                style: const TextStyle(color: Colors.white)),
+            TextField(
+                controller: phoneCtrl,
+                decoration: const InputDecoration(labelText: 'Phone'),
+                style: const TextStyle(color: Colors.white)),
+            TextField(
+                controller: addrCtrl,
+                decoration: const InputDecoration(labelText: 'Address'),
+                style: const TextStyle(color: Colors.white)),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel')),
           FilledButton(
             onPressed: () async {
               final err = await app.addOrUpdateWholesaler(
@@ -256,7 +332,10 @@ class _OrdersScreenState extends State<OrdersScreen> {
               if (!mounted) return;
               Navigator.pop(context);
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(err == null ? 'Wholesaler added' : 'Failed: $err')),
+                SnackBar(
+                    content: Text(err == null
+                        ? 'Wholesaler added'
+                        : 'Failed: $err')),
               );
             },
             child: const Text('Save'),
@@ -266,6 +345,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
     );
   }
 
+  // ---------- UI ----------
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppDataProvider>();
@@ -275,45 +355,56 @@ class _OrdersScreenState extends State<OrdersScreen> {
     final myShop = app.selectedShopName ?? '';
 
     final allOrders = app.orders;
+
+    // mapped for pending counts (unfiltered)
+    final mappedAll = allOrders
+        .map((m) => {...m, 'uiStatus': _uiStatusOf(m['status'])})
+        .toList();
+
+    // filtered list for cards
     final orders = _applyFilter(allOrders);
 
+    // pending counts (Ordered + Forwarded)
     final Map<String, int> pendingCounts = {};
-    for (final o in allOrders) {
-      final st = (o['status'] ?? 'Pending').toString();
-      if (st == 'Pending' || st == 'Placed' || st == 'Forwarded') {
-        final w = (o['wholesalerName'] ?? o['wholesaler'] ?? 'Wholesaler').toString();
+    for (final o in mappedAll) {
+      final st = o['uiStatus'] as String;
+      if (st == 'Ordered' || st == 'Forwarded') {
+        final w =
+            (o['wholesalerName'] ?? o['wholesaler'] ?? 'Wholesaler')
+                .toString();
         if (w.isEmpty) continue;
         pendingCounts[w] = (pendingCounts[w] ?? 0) + 1;
       }
     }
 
-    final canManage = isManagerOrAdmin;
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Orders'),
         actions: [
-          if (canManage)
+          IconButton(
+            tooltip:
+                _view == _OrdersView.table ? 'List View' : 'Table View',
+            icon: Icon(_view == _OrdersView.table
+                ? Icons.view_list
+                : Icons.grid_on),
+            onPressed: () => setState(() {
+              _view = _view == _OrdersView.table
+                  ? _OrdersView.list
+                  : _OrdersView.table;
+            }),
+          ),
+          if (isManagerOrAdmin)
             IconButton(
               tooltip: 'Add Wholesaler',
               icon: const Icon(Icons.person_add_alt_1),
               onPressed: _showAddWhDialog,
             ),
-          IconButton(
-            tooltip: 'Return Items',
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Return Items screen TODO')),
-              );
-            },
-            icon: const Icon(Icons.assignment_return_rounded),
-          ),
           PopupMenuButton<String>(
             initialValue: _statusFilter,
             onSelected: (v) => setState(() => _statusFilter = v),
             itemBuilder: (ctx) => const [
               PopupMenuItem(value: 'All', child: Text('All')),
-              PopupMenuItem(value: 'Pending', child: Text('Pending')),
+              PopupMenuItem(value: 'Ordered', child: Text('Ordered')),
               PopupMenuItem(value: 'Forwarded', child: Text('Forwarded')),
               PopupMenuItem(value: 'Received', child: Text('Received')),
             ],
@@ -325,92 +416,232 @@ class _OrdersScreenState extends State<OrdersScreen> {
         onRefresh: () => _refresh(app),
         child: _busy
             ? const Center(child: CircularProgressIndicator())
-            : ListView(
-                padding: const EdgeInsets.all(12),
-                children: [
-                  if (pendingCounts.isNotEmpty) ...[
-                    Text('Pending Orders from Wholesalers',
-                        style: Theme.of(context).textTheme.titleMedium),
-                    const SizedBox(height: 8),
-                    Card(
-                      elevation: 1,
-                      child: Column(
-                        children: pendingCounts.entries.map((e) {
-                          return ListTile(
-                            title: Text(e.key),
-                            trailing: Text('x${e.value}',
-                                style: const TextStyle(fontWeight: FontWeight.w600)),
-                            onTap: () {
-                              setState(() {
-                                _statusFilter = 'Pending';
-                                _wholesalerFilter = e.key;
-                              });
-                            },
-                          );
-                        }).toList(),
-                      ),
+            : (_view == _OrdersView.table
+                ? _TableView(
+                    date: _tableDate,
+                    statusFilter:
+                        _statusFilter, // filter applied in table
+                    onPickDate: () async {
+                      final d = await showDatePicker(
+                        context: context,
+                        firstDate: DateTime(2023, 1, 1),
+                        lastDate: DateTime(2100),
+                        initialDate: _tableDate,
+                      );
+                      if (d != null) setState(() => _tableDate = d);
+                    },
+                    onOpenActions: (row) => _openOrderActionsSheet(
+                      context: context,
+                      row: row,
+                      isManagerOrAdmin: isManagerOrAdmin,
+                      myShop: myShop,
                     ),
-                    const SizedBox(height: 12),
-                  ],
-
-                  if (orders.isEmpty) ...[
-                    const SizedBox(height: 80),
-                    const Center(child: Text('No orders found')),
-                    const SizedBox(height: 12),
-                    Center(
-                      child: ElevatedButton.icon(
-                        icon: const Icon(Icons.add),
-                        label: const Text('Add Order'),
-                        onPressed: _busy ? null : () => _startAddOrder(context),
-                      ),
-                    ),
-                  ] else ...[
-                    Row(
-                      children: [
-                        if ((_wholesalerFilter ?? '').isNotEmpty)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 8.0),
-                            child: InputChip(
-                              label: Text('Wholesaler: $_wholesalerFilter'),
-                              onDeleted: () => setState(() => _wholesalerFilter = null),
-                            ),
-                          ),
-                        const Spacer(),
-                        Text('Showing ${orders.length}'),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    ...orders.map(
-                      (o) => _OrderCard(
-                        data: o,
-                        isManagerOrAdmin: isManagerOrAdmin,
-                        myShopName: myShop,
-                        dateFmt: _dateFmt,
-                        onForward: (id) => _safeRun(() async {
-                          await context.read<AppDataProvider>().forwardOrder(id);
-                          if (!context.mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Order forwarded.')),
-                          );
-                        }),
-                        onReceived: (id) => _safeRun(() async {
-                          await context.read<AppDataProvider>().markOrderReceived(id);
-                          if (!context.mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Order received.')),
-                          );
-                        }),
-                      ),
-                    ),
-                    const SizedBox(height: 100),
-                  ],
-                ],
-              ),
+                  )
+                : _ListViewSection(
+                    pendingCounts: pendingCounts,
+                    orders: orders,
+                    isManagerOrAdmin: isManagerOrAdmin,
+                    myShop: myShop,
+                    dateFmt: _dateFmt,
+                    onStartAdd: () => _startAddOrder(context),
+                    onForward: (id) => _safeRun(() async {
+                      await context
+                          .read<AppDataProvider>()
+                          .forwardOrder(id);
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                            content: Text('Order forwarded.')),
+                      );
+                    }),
+                    onReceived: (id) => _safeRun(() async {
+                      await context
+                          .read<AppDataProvider>()
+                          .markOrderReceived(id);
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                            content: Text('Order received.')),
+                      );
+                    }),
+                    onDelete: (id) => _safeRun(() async {
+                      await context
+                          .read<AppDataProvider>()
+                          .deleteOrder(id);
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Order deleted.')),
+                      );
+                    }),
+                  )),
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: _busy ? null : () => _startAddOrder(context),
         child: const Icon(Icons.add),
       ),
+    );
+  }
+
+  Future<void> _openOrderActionsSheet({
+    required BuildContext context,
+    required Map<String, dynamic> row,
+    required bool isManagerOrAdmin,
+    required String myShop,
+  }) async {
+    final id = (row['id'] ?? '').toString();
+    final uiStatus = _uiStatusOf(row['status']);
+    final shop = (row['shopName'] ?? row['shop'] ?? '').toString();
+    final belongsToMyShop = shop == myShop;
+
+    await showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.send),
+              title: const Text('Forward'),
+              enabled: isManagerOrAdmin && uiStatus == 'Ordered',
+              onTap: !isManagerOrAdmin || uiStatus != 'Ordered'
+                  ? null
+                  : () async {
+                      Navigator.pop(context);
+                      await _safeRun(() => context
+                          .read<AppDataProvider>()
+                          .forwardOrder(id));
+                    },
+            ),
+            ListTile(
+              leading: const Icon(Icons.check_circle),
+              title: const Text('Mark Received'),
+              enabled: belongsToMyShop && uiStatus != 'Received',
+              onTap: !belongsToMyShop || uiStatus == 'Received'
+                  ? null
+                  : () async {
+                      Navigator.pop(context);
+                      await _safeRun(() => context
+                          .read<AppDataProvider>()
+                          .markOrderReceived(id));
+                    },
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_forever,
+                  color: Colors.redAccent),
+              title: const Text('Delete',
+                  style: TextStyle(color: Colors.redAccent)),
+              enabled: isManagerOrAdmin,
+              onTap: !isManagerOrAdmin
+                  ? null
+                  : () async {
+                      Navigator.pop(context);
+                      await _safeRun(() => context
+                          .read<AppDataProvider>()
+                          .deleteOrder(id));
+                    },
+            ),
+            const SizedBox(height: 6),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+//// ===================== LIST VIEW =====================
+
+class _ListViewSection extends StatelessWidget {
+  const _ListViewSection({
+    required this.pendingCounts,
+    required this.orders,
+    required this.isManagerOrAdmin,
+    required this.myShop,
+    required this.dateFmt,
+    required this.onStartAdd,
+    required this.onForward,
+    required this.onReceived,
+    required this.onDelete,
+  });
+
+  final Map<String, int> pendingCounts;
+  final List<Map<String, dynamic>> orders;
+  final bool isManagerOrAdmin;
+  final String myShop;
+  final DateFormat dateFmt;
+  final VoidCallback onStartAdd;
+  final Future<void> Function(String id) onForward;
+  final Future<void> Function(String id) onReceived;
+  final Future<void> Function(String id) onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        if (pendingCounts.isNotEmpty) ...[
+          Text('Pending Orders from Wholesalers',
+              style: Theme.of(context)
+                  .textTheme
+                  .titleMedium
+                  ?.copyWith(color: Colors.white)),
+          const SizedBox(height: 8),
+          Card(
+            elevation: 1,
+            color: const Color(0xFF121A26),
+            child: Column(
+              children: pendingCounts.entries.map((e) {
+                return ListTile(
+                  title: Text(e.key,
+                      style: const TextStyle(color: Colors.white)),
+                  trailing: Text('x${e.value}',
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white)),
+                );
+              }).toList(),
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
+        if (orders.isEmpty) ...[
+          const SizedBox(height: 80),
+          const Center(
+              child: Text('No orders found',
+                  style: TextStyle(color: Colors.white70))),
+          const SizedBox(height: 12),
+          Center(
+            child: ElevatedButton.icon(
+              icon: const Icon(Icons.add),
+              label: const Text('Add Order'),
+              onPressed: onStartAdd,
+            ),
+          ),
+        ] else ...[
+          Row(
+            children: [
+              const Spacer(),
+              Text('Showing ${orders.length}',
+                  style: const TextStyle(color: Colors.white70)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ...orders.map(
+            (o) => _OrderCard(
+              data: o,
+              isManagerOrAdmin: isManagerOrAdmin,
+              myShopName: myShop,
+              dateFmt: dateFmt,
+              onForward: onForward,
+              onReceived: onReceived,
+              onDelete: onDelete,
+            ),
+          ),
+          const SizedBox(height: 100),
+        ],
+      ],
     );
   }
 }
@@ -423,6 +654,7 @@ class _OrderCard extends StatelessWidget {
     required this.dateFmt,
     required this.onForward,
     required this.onReceived,
+    required this.onDelete,
   });
 
   final Map<String, dynamic> data;
@@ -431,21 +663,22 @@ class _OrderCard extends StatelessWidget {
   final DateFormat dateFmt;
   final Future<void> Function(String id) onForward;
   final Future<void> Function(String id) onReceived;
+  final Future<void> Function(String id) onDelete;
 
   @override
   Widget build(BuildContext context) {
     final id = (data['id'] ?? '').toString();
-    final status = (data['status'] ?? 'Pending').toString();
-    final isForwarded = status == 'Forwarded';
-    final isReceived = status == 'Received';
+    final uiStatus = (data['uiStatus'] ?? 'Ordered').toString();
 
     final wholesalerLabel =
-        (data['wholesalerName'] ?? data['wholesaler'] ?? 'Wholesaler').toString();
+        (data['wholesalerName'] ?? data['wholesaler'] ?? 'Wholesaler')
+            .toString();
     final shopLabel = (data['shopName'] ?? data['shop'] ?? '-').toString();
 
     final amount = (data['amount'] is num)
         ? (data['amount'] as num).toDouble()
-        : double.tryParse('${data['amount'] ?? 0}') ?? 0.0;
+        : double.tryParse('${data['amount'] ?? 0}') ??
+            0.0;
 
     final createdAtRaw = data['createdAt'];
     final createdAt = createdAtRaw is DateTime
@@ -458,84 +691,120 @@ class _OrderCard extends StatelessWidget {
 
     final belongsToMyShop = shopLabel == myShopName;
 
+    final canForward = isManagerOrAdmin && uiStatus == 'Ordered';
+    final canReceive = belongsToMyShop && uiStatus != 'Received';
+
     return Card(
       elevation: 1.5,
+      color: const Color(0xFF121A26),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Expanded(
-              child: Text(
-                wholesalerLabel,
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-              ),
-            ),
-            Text(
-              'Amount: ${amount.toStringAsFixed(2)}',
-              style: const TextStyle(fontWeight: FontWeight.w500),
-            ),
-          ]),
-          const SizedBox(height: 6),
-          Row(children: [
-            Icon(Icons.storefront, size: 16, color: Colors.grey[600]),
-            const SizedBox(width: 6),
-            Expanded(child: Text('Shop: $shopLabel', overflow: TextOverflow.ellipsis)),
-            if (createdAt != null) ...[
-              const SizedBox(width: 8),
-              Icon(Icons.access_time, size: 16, color: Colors.grey[600]),
-              const SizedBox(width: 4),
-              Text(dateFmt.format(createdAt)),
-            ],
-          ]),
-          const SizedBox(height: 6),
-          if (createdBy.isNotEmpty)
-            Text('By: $createdBy', style: TextStyle(fontSize: 12, color: Colors.grey[700])),
-          if (note.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text('Note: $note', style: TextStyle(fontSize: 12, color: Colors.grey[700])),
-            ),
-          if (invoiceUrl.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Row(
-                children: [
-                  const Icon(Icons.image, size: 16),
+        padding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                Expanded(
+                  child: Text(
+                    wholesalerLabel,
+                    style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white),
+                  ),
+                ),
+                Text(
+                  'Amount: ${amount.toStringAsFixed(2)}',
+                  style: const TextStyle(
+                      fontWeight: FontWeight.w500, color: Colors.white),
+                ),
+                if (isManagerOrAdmin) ...[
                   const SizedBox(width: 6),
-                  const Text('Invoice attached', style: TextStyle(fontSize: 12)),
-                  const Spacer(),
-                  TextButton(
-                    onPressed: () {
-                      showDialog(
-                        context: context,
-                        builder: (_) => Dialog(
-                          child: InteractiveViewer(
-                            child: Image.network(invoiceUrl, fit: BoxFit.contain),
-                          ),
-                        ),
-                      );
-                    },
-                    child: const Text('See photo'),
-                  )
+                  IconButton(
+                    tooltip: 'Delete',
+                    onPressed: () => onDelete(id),
+                    icon: const Icon(Icons.delete_forever,
+                        color: Colors.redAccent),
+                  ),
                 ],
-              ),
-            ),
-          const SizedBox(height: 8),
-          Row(children: [
-            _StatusChip(status: status),
-            const Spacer(),
-            ElevatedButton(
-              onPressed: (isForwarded || isReceived || !isManagerOrAdmin) ? null : () => onForward(id),
-              child: const Text('Forward'),
-            ),
-            const SizedBox(width: 8),
-            ElevatedButton(
-              onPressed: (isReceived || !belongsToMyShop) ? null : () => onReceived(id),
-              child: const Text('Received'),
-            ),
-          ]),
-        ]),
+              ]),
+              const SizedBox(height: 6),
+              Row(children: [
+                const Icon(Icons.storefront,
+                    size: 16, color: Colors.white70),
+                const SizedBox(width: 6),
+                Expanded(
+                    child: Text('Shop: $shopLabel',
+                        overflow: TextOverflow.ellipsis,
+                        style:
+                            const TextStyle(color: Colors.white70))),
+                if (createdAt != null) ...[
+                  const SizedBox(width: 8),
+                  const Icon(Icons.access_time,
+                      size: 16, color: Colors.white70),
+                  const SizedBox(width: 4),
+                  Text(dateFmt.format(createdAt),
+                      style: const TextStyle(color: Colors.white70)),
+                ],
+              ]),
+              const SizedBox(height: 6),
+              if (createdBy.isNotEmpty)
+                Text('By: $createdBy',
+                    style: const TextStyle(
+                        fontSize: 12, color: Colors.white70)),
+              if (note.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text('Note: $note',
+                      style: const TextStyle(
+                          fontSize: 12, color: Colors.white70)),
+                ),
+              if (invoiceUrl.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.image,
+                          size: 16, color: Colors.white70),
+                      const SizedBox(width: 6),
+                      const Text('Invoice attached',
+                          style: TextStyle(
+                              fontSize: 12, color: Colors.white70)),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: () {
+                          showDialog(
+                            context: context,
+                            builder: (_) => Dialog(
+                              backgroundColor: const Color(0xFF0F1522),
+                              child: InteractiveViewer(
+                                child: Image.network(invoiceUrl,
+                                    fit: BoxFit.contain),
+                              ),
+                            ),
+                          );
+                        },
+                        child: const Text('See photo'),
+                      )
+                    ],
+                  ),
+                ),
+              const SizedBox(height: 8),
+              Row(children: [
+                _StatusChip(status: uiStatus),
+                const Spacer(),
+                ElevatedButton(
+                  onPressed: canForward ? () => onForward(id) : null,
+                  child: const Text('Forward'),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: canReceive ? () => onReceived(id) : null,
+                  child: const Text('Received'),
+                ),
+              ]),
+            ]),
       ),
     );
   }
@@ -547,26 +816,290 @@ class _StatusChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Color bg, fg;
+    late Color fg;
     switch (status) {
       case 'Forwarded':
-        bg = Colors.orange.shade50; fg = Colors.orange.shade800; break;
+        fg = Colors.orange;
+        break;
       case 'Received':
-        bg = Colors.green.shade50;  fg = Colors.green.shade800;  break;
+        fg = Colors.green;
+        break;
       default:
-        bg = Colors.blueGrey.shade50; fg = Colors.blueGrey.shade800;
+        fg = Colors.blueAccent;
     }
+    final bg = fg.withOpacity(0.15);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding:
+          const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: fg.withOpacity(0.2)),
+        border: Border.all(color: fg.withOpacity(0.25)),
       ),
       child: Text(
         status,
-        style: TextStyle(color: fg, fontWeight: FontWeight.w600, fontSize: 12),
+        style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w600,
+            fontSize: 12),
       ),
+    );
+  }
+}
+
+//// ===================== TABLE VIEW (horizontal scroll + filter) =====================
+
+class _TableView extends StatefulWidget {
+  const _TableView({
+    required this.date,
+    required this.onPickDate,
+    required this.onOpenActions,
+    required this.statusFilter,
+  });
+
+  final DateTime date;
+  final Future<void> Function() onPickDate;
+  final void Function(Map<String, dynamic> row) onOpenActions;
+  final String statusFilter;
+
+  @override
+  State<_TableView> createState() => _TableViewState();
+}
+
+class _TableViewState extends State<_TableView> {
+  Future<List<Map<String, dynamic>>>? _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _TableView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.date != widget.date ||
+        oldWidget.statusFilter != widget.statusFilter) {
+      _load();
+    }
+  }
+
+  void _load() {
+    final app = context.read<AppDataProvider>();
+    // shopName 'All' pass kar rahe hain; provider null/'All' ko all-shops treat kare
+    _future = app.fetchOrdersForDate(
+      shopName: 'All',
+      date: widget.date,
+    );
+    setState(() {});
+  }
+
+  String _uiStatusOf(dynamic raw) {
+    final s = (raw ?? 'Pending').toString();
+    if (s == 'Received') return 'Received';
+    if (s == 'Forwarded') return 'Forwarded';
+    return 'Ordered';
+  }
+
+  Widget _tick(bool yes) => Icon(
+        yes ? Icons.check_circle : Icons.cancel,
+        size: 18,
+        color: yes ? Colors.green : Colors.grey,
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final dateTitle = DateFormat('dd MMM yyyy').format(widget.date);
+
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _future,
+      builder: (ctx, snap) {
+        final itemsAll = (snap.data ?? const [])
+            .map((m) => {...m, 'uiStatus': _uiStatusOf(m['status'])})
+            .toList();
+
+        // same filter as list view
+        final items = widget.statusFilter == 'All'
+            ? itemsAll
+            : itemsAll
+                .where((m) =>
+                    (m['uiStatus'] as String) == widget.statusFilter)
+                .toList();
+
+        // group by wholesaler
+        final Map<String, List<Map<String, dynamic>>> byWh = {};
+        for (final m in items) {
+          final w = (m['wholesalerName'] ?? '').toString();
+          byWh.putIfAbsent(w, () => []).add(m);
+        }
+
+        // unique shops (sorted)
+        final List<String> shops = {
+          for (final m in items)
+            (m['shopName'] ?? m['shop'] ?? '').toString().trim()
+        }.where((s) => s.isNotEmpty).toList()
+          ..sort();
+
+        return ListView(
+          padding: const EdgeInsets.all(12),
+          children: [
+            Row(
+              children: [
+                Text(
+                  dateTitle,
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleMedium
+                      ?.copyWith(color: Colors.white),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: widget.onPickDate,
+                  icon: const Icon(Icons.date_range),
+                  label: const Text('Change'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white70,
+                    side: const BorderSide(color: Colors.white24),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (snap.connectionState == ConnectionState.waiting)
+              const Center(child: CircularProgressIndicator())
+            else if (items.isEmpty)
+              const Padding(
+                padding: EdgeInsets.only(top: 40),
+                child: Center(
+                  child: Text('No orders for this date',
+                      style: TextStyle(color: Colors.white70)),
+                ),
+              )
+            else
+              ...byWh.entries.map((entry) {
+                final wholesalerName = entry.key;
+                final list = entry.value;
+
+                // shop -> row map
+                final Map<String, Map<String, dynamic>> rowMap = {
+                  for (final m in list)
+                    (m['shopName'] ?? m['shop'] ?? '').toString(): m
+                };
+
+                return Card(
+                  color: const Color(0xFF121A26),
+                  margin: const EdgeInsets.only(bottom: 16),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // top: wholesaler name
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1C2535),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Center(
+                            child: Text(
+                              wholesalerName.isEmpty
+                                  ? 'Wholesaler'
+                                  : wholesalerName,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 16,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+
+                        // table: horizontally scrollable (so columns kabhi cut na hon)
+                        LayoutBuilder(builder: (ctx, cs) {
+                          final minTableWidth = 780.0; // 5 columns comfortably
+                          final tableWidth = cs.maxWidth < minTableWidth
+                              ? minTableWidth
+                              : cs.maxWidth;
+
+                          return SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: ConstrainedBox(
+                              constraints:
+                                  BoxConstraints(minWidth: tableWidth),
+                              child: Theme(
+                                data: Theme.of(context).copyWith(
+                                  dividerColor: Colors.white12,
+                                ),
+                                child: DataTable(
+                                  columnSpacing: 28,
+                                  headingTextStyle: const TextStyle(
+                                      color: Colors.white70,
+                                      fontWeight: FontWeight.w700),
+                                  dataTextStyle: const TextStyle(
+                                      color: Colors.white),
+                                  columns: const [
+                                    DataColumn(label: Text('Shop')),
+                                    DataColumn(label: Text('Ordered')),
+                                    DataColumn(label: Text('Forwarded')),
+                                    DataColumn(label: Text('Received')),
+                                    DataColumn(label: Text('Actions')),
+                                  ],
+                                  rows: shops.map((shopName) {
+                                    final m = rowMap[shopName];
+                                    final uiStatus = m == null
+                                        ? '—'
+                                        : _uiStatusOf(m['status']);
+
+                                    final isOrdered = uiStatus == 'Ordered';
+                                    final isForwarded =
+                                        uiStatus == 'Forwarded';
+                                    final isReceived =
+                                        uiStatus == 'Received';
+
+                                    return DataRow(
+                                      cells: [
+                                        DataCell(Text(shopName)),
+                                        DataCell(Center(
+                                            child: _tick(isOrdered))),
+                                        DataCell(Center(
+                                            child: _tick(isForwarded))),
+                                        DataCell(Center(
+                                            child: _tick(isReceived))),
+                                        DataCell(
+                                          IconButton(
+                                            tooltip: 'Actions',
+                                            onPressed: m == null
+                                                ? null
+                                                : () => widget
+                                                    .onOpenActions(m),
+                                            icon: const Icon(
+                                              Icons.more_horiz,
+                                              color: Colors.white70,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    );
+                                  }).toList(),
+                                ),
+                              ),
+                            ),
+                          );
+                        }),
+                      ],
+                    ),
+                  ),
+                );
+              }),
+          ],
+        );
+      },
     );
   }
 }
