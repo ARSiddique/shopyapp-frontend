@@ -82,7 +82,7 @@ class _Tile extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
 
-  const _Tile({super.key, required this.label, required this.onTap});
+  const _Tile({required this.label, required this.onTap});
 
   @override
   Widget build(BuildContext context) {

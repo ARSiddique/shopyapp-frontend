@@ -1,7 +1,8 @@
 import java.util.Properties
+
 plugins {
     id("com.android.application")
-    id("kotlin-android")
+    id("org.jetbrains.kotlin.android")      // updated plugin id
     id("dev.flutter.flutter-gradle-plugin")
     id("com.google.gms.google-services")
 }
@@ -15,6 +16,7 @@ if (keystorePropertiesFile.exists()) {
 android {
     namespace = "com.ars.shopyapp"
     compileSdk = 35
+    // buildToolsVersion removed (AGP will choose a compatible version)
     ndkVersion = "27.0.12077973"
 
     compileOptions {
@@ -30,20 +32,25 @@ android {
         versionName = flutter.versionName
     }
 
-    /* --- NEW: release signing using your key.properties --- */
+    // Release signing (guarded; builds even if key.properties is missing)
+    val hasKeys = keystoreProperties.containsKey("storeFile")
     signingConfigs {
-        create("release") {
-            keyAlias = keystoreProperties["keyAlias"] as String?
-            keyPassword = keystoreProperties["keyPassword"] as String?
-            storeFile = file(keystoreProperties["storeFile"] as String?)
-            storePassword = keystoreProperties["storePassword"] as String?
+        if (hasKeys) {
+            create("release") {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+            }
         }
     }
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("release")
-            // Optional size tweaks (enable later if you want):
+            if (hasKeys) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+            // Enable later if needed:
             // isMinifyEnabled = true
             // isShrinkResources = true
             // proguardFiles(
@@ -52,7 +59,7 @@ android {
             // )
         }
         debug {
-            // no special signing; Android Studio/Flutter will use debug keystore
+            // default debug signing
         }
     }
 }

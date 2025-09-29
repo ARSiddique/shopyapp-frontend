@@ -15,7 +15,7 @@ class WholesalerInvoicesScreen extends StatefulWidget {
 class _WholesalerInvoicesScreenState extends State<WholesalerInvoicesScreen> {
   String _view = 'Monthly';
   int _periodShift = 0;
-  DateTime _anchor = DateTime.now();
+  final DateTime _anchor = DateTime.now();
   bool _loading = false;
 
   DateTime get _shiftedAnchor {
@@ -169,8 +169,8 @@ class _WholesalerInvoicesScreenState extends State<WholesalerInvoicesScreen> {
                     ]),
                     builder: (_, snap) {
                       if (!snap.hasData) return const Center(child: CircularProgressIndicator());
-                      final inv = (snap.data![0] as List<Map<String,dynamic>>).fold<double>(0, (s,m)=>s+(m['amount'] as double));
-                      final pay = (snap.data![1] as List<Map<String,dynamic>>).fold<double>(0, (s,m)=>s+(m['amount'] as double));
+                      final inv = (snap.data![0]).fold<double>(0, (s,m)=>s+(m['amount'] as double));
+                      final pay = (snap.data![1]).fold<double>(0, (s,m)=>s+(m['amount'] as double));
                       final bal = inv - pay;
                       return Center(
                         child: Column(mainAxisSize: MainAxisSize.min, children: [

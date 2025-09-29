@@ -51,3 +51,5 @@ flutter:
 
 dependency_overrides:
   open_file_macos: any
+  printing:
+    path: plugins/printing

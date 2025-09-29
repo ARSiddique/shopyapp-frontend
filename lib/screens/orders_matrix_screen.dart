@@ -75,10 +75,10 @@ class _OrdersMatrixScreenState extends State<OrdersMatrixScreen> {
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppDataProvider>();
-    final shopsList = [
+    final shopsList = <dynamic>{
       ...app.shops.map((s) => (s['name'] ?? '').toString()),
       ..._matrix.keys, // ensure any shops with orders but not in shops collection
-    ].toSet().toList()
+    }.toList()
       ..sort((a, b) => a.toString().toLowerCase().compareTo(b.toString().toLowerCase()));
 
     final dateStr = DateFormat('MMMM d, yyyy').format(_anchor);

@@ -604,7 +604,7 @@ class WholesalerDetailScreen extends StatelessWidget {
         await FirebaseFirestore.instance.collection('wholesalers').get();
     final names = snap.docs
         .map((d) =>
-            ((d.data() as Map<String, dynamic>)['name'] ?? '').toString())
+            ((d.data())['name'] ?? '').toString())
         .where((s) => s.isNotEmpty)
         .toList()
       ..sort();

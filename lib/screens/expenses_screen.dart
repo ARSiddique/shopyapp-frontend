@@ -12,7 +12,7 @@ class ExpensesScreen extends StatefulWidget {
 }
 
 class _ExpensesScreenState extends State<ExpensesScreen> {
-  bool _busy = false;
+  final bool _busy = false;
   final _df = DateFormat('dd MMM, hh:mm a');
 
   @override
