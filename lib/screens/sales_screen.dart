@@ -14,6 +14,18 @@ import '../providers/app_data_provider.dart';
 import 'add_sale_screen.dart';
 import 'shop_selection_screen.dart';
 
+class _DayRow {
+  _DayRow({required this.shop, required this.day});
+  final String shop;
+  final DateTime day; // midnight
+  double cash = 0.0;
+  double card = 0.0;
+  double other = 0.0;
+  double total = 0.0;
+  String? employee;
+  DateTime? lastSaleAt;
+}
+
 class SalesScreen extends StatefulWidget {
   const SalesScreen({super.key});
 
@@ -22,17 +34,14 @@ class SalesScreen extends StatefulWidget {
 }
 
 class _SalesScreenState extends State<SalesScreen> {
-  // ---- Filters ----
   String _period = 'Daily';
   String _selectedShop = 'All';
   DateTime _anchorDate = DateTime.now();
   DateTimeRange? _range;
 
-  // Daily/SpecificDate + today cutoff
   final int _cutoffHour = 21;
 
-  // Export cache
-  List<_ShopRow> _lastRows = [];
+  List<_DayRow> _exportRows = [];
   DateTime? _lastFrom;
   DateTime? _lastTo;
 
@@ -75,8 +84,6 @@ class _SalesScreenState extends State<SalesScreen> {
             onPressed: _exportCsv,
             icon: const Icon(Icons.table_chart_outlined),
           ),
-
-          // Add Sale: Admin/Manager -> ShopSelection (Actions hub), Employee -> direct form
           IconButton(
             tooltip: 'Add Sale',
             onPressed: () {
@@ -86,7 +93,8 @@ class _SalesScreenState extends State<SalesScreen> {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => const ShopSelectionScreen(next: NextAction.actions),
+                    builder: (_) =>
+                        const ShopSelectionScreen(next: NextAction.actions),
                   ),
                 );
               } else {
@@ -98,8 +106,6 @@ class _SalesScreenState extends State<SalesScreen> {
             },
             icon: const Icon(Icons.add),
           ),
-
-          // Admin/Manager only: compute+post from transactions
           Builder(
             builder: (ctx) {
               final app = ctx.watch<AppDataProvider>();
@@ -123,9 +129,9 @@ class _SalesScreenState extends State<SalesScreen> {
       ),
       body: Column(
         children: [
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           _filtersRow(allShopOptions, periodLabel),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           Expanded(
             child: _tableStream(
               from: from,
@@ -147,14 +153,13 @@ class _SalesScreenState extends State<SalesScreen> {
     final isSpecific = _period == 'Specific Date';
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 10),
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: Row(
           children: [
-            // Shop
             SizedBox(
-              width: 170,
+              width: 160,
               child: DropdownButtonFormField<String>(
                 isDense: true,
                 value: shopOptions.contains(_selectedShop) ? _selectedShop : 'All',
@@ -169,11 +174,9 @@ class _SalesScreenState extends State<SalesScreen> {
                 ),
               ),
             ),
-            const SizedBox(width: 12),
-
-            // Period
+            const SizedBox(width: 10),
             SizedBox(
-              width: 180,
+              width: 170,
               child: DropdownButtonFormField<String>(
                 isDense: true,
                 value: _period,
@@ -182,7 +185,8 @@ class _SalesScreenState extends State<SalesScreen> {
                   DropdownMenuItem(value: 'Weekly', child: Text('Weekly')),
                   DropdownMenuItem(value: 'Monthly', child: Text('Monthly')),
                   DropdownMenuItem(value: 'Yearly', child: Text('Yearly')),
-                  DropdownMenuItem(value: 'Specific Date', child: Text('Specific Date')),
+                  DropdownMenuItem(
+                      value: 'Specific Date', child: Text('Specific Date')),
                   DropdownMenuItem(value: 'Date Range', child: Text('Date Range')),
                 ],
                 onChanged: (v) {
@@ -207,15 +211,11 @@ class _SalesScreenState extends State<SalesScreen> {
                 ),
               ),
             ),
-            const SizedBox(width: 12),
-
-            // Picker button
+            const SizedBox(width: 10),
             if (isRange)
               _rangePickerButton(theme)
             else
               _datePickerButton(theme, periodLabel, isSpecific),
-
-            const SizedBox(width: 8),
           ],
         ),
       ),
@@ -237,14 +237,14 @@ class _SalesScreenState extends State<SalesScreen> {
             sub,
             style: TextStyle(
               fontSize: 12,
-              color: theme.textTheme.bodySmall?.color?.withValues(alpha: 0.8),
+              color: theme.textTheme.bodySmall?.color?.withAlpha(200),
             ),
           ),
         ],
       ),
       onPressed: _pickAnchorDate,
       style: OutlinedButton.styleFrom(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       ),
     );
   }
@@ -252,14 +252,14 @@ class _SalesScreenState extends State<SalesScreen> {
   Widget _rangePickerButton(ThemeData theme) {
     final label = (_range == null)
         ? 'Pick range'
-        : '${DateFormat('dd MMM, yyyy').format(_range!.start)}  –  ${DateFormat('dd MMM, yyyy').format(_range!.end)}';
+        : '${DateFormat('dd MMM, yyyy').format(_range!.start)} – ${DateFormat('dd MMM, yyyy').format(_range!.end)}';
 
     return OutlinedButton.icon(
       icon: const Icon(Icons.date_range),
       label: Text(label),
       onPressed: _pickRange,
       style: OutlinedButton.styleFrom(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       ),
     );
   }
@@ -322,14 +322,16 @@ class _SalesScreenState extends State<SalesScreen> {
                 }
                 if (fs.hasError) return Center(child: Text('Error: ${fs.error}'));
                 final docs = fs.data?.docs ?? const [];
-                final rows = _aggregate(
+                final rows = _rowsPerDay(
                   docs.map((d) => app.mapSaleDoc(d)).where((m) {
                     final dt = m['createdAt'] as DateTime;
                     return !dt.isBefore(from) && dt.isBefore(to);
                   }).toList(),
                   allShops,
+                  from,
+                  to,
                 );
-                return _buildTable(rows, from, to);
+                return _buildTablePerDay(rows);
               },
             );
           }
@@ -339,74 +341,88 @@ class _SalesScreenState extends State<SalesScreen> {
         if (!snap.hasData) return const Center(child: CircularProgressIndicator());
 
         final docs = snap.data!.docs;
-        final rows = _aggregate(
+        final rows = _rowsPerDay(
           docs.map((d) => app.mapSaleDoc(d)).toList(),
           allShops,
+          from,
+          to,
         );
-        return _buildTable(rows, from, to);
+        return _buildTablePerDay(rows);
       },
     );
   }
 
-  // Make sure all shops appear (even with blanks) + aggregate totals
-  List<_ShopRow> _aggregate(List<Map<String, dynamic>> sales, List<String> allShops) {
-    final map = <String, _ShopRow>{};
+  List<_DayRow> _rowsPerDay(
+    List<Map<String, dynamic>> sales,
+    List<String> visibleShops,
+    DateTime from,
+    DateTime to,
+  ) {
+    final byKey = <String, _DayRow>{};
 
-    for (final s in allShops) {
-      map[s] = _ShopRow(shop: s);
+    for (int i = 0; i < to.difference(from).inDays; i++) {
+      final day =
+          DateTime(from.year, from.month, from.day).add(Duration(days: i));
+      for (final shop in visibleShops) {
+        final key = '${shop}_${DateFormat('yyyy-MM-dd').format(day)}';
+        byKey[key] = _DayRow(shop: shop, day: day);
+      }
     }
 
     for (final m in sales) {
       final shop = (m['shop'] ?? '').toString();
-      final cash = (m['cash'] as num?)?.toDouble() ?? 0.0;
-      final card = (m['card'] as num?)?.toDouble() ?? 0.0;
-      final other = (m['other'] as num?)?.toDouble() ?? 0.0;
-      final total = (m['total'] as num?)?.toDouble() ?? (cash + card + other);
-      final emp = (m['employee'] ?? m['addedBy'] ?? '').toString();
+      if (!visibleShops.contains(shop)) continue;
       final dt = (m['createdAt'] as DateTime?) ?? DateTime.now();
+      final day = DateTime(dt.year, dt.month, dt.day);
+      if (day.isBefore(from) || !day.isBefore(to)) continue;
 
-      final row = map[shop] ?? _ShopRow(shop: shop);
+      final key = '${shop}_${DateFormat('yyyy-MM-dd').format(day)}';
+      final row = byKey[key] ?? _DayRow(shop: shop, day: day);
+
+      double d(v) => v is num ? v.toDouble() : double.tryParse('$v') ?? 0.0;
+      final cash = d(m['cash']), card = d(m['card']), other = d(m['other']);
+      final total = d(m['total'] ?? (cash + card + other));
+
       row.cash += cash;
       row.card += card;
       row.other += other;
       row.total += total;
+      final emp = (m['employee'] ?? m['addedBy'] ?? '').toString();
       if (row.lastSaleAt == null || dt.isAfter(row.lastSaleAt!)) {
         row.lastSaleAt = dt;
         row.employee = emp;
       }
-      map[shop] = row;
+      byKey[key] = row;
     }
 
-    final rows = map.values.toList()
+    final rows = byKey.values.toList()
       ..sort((a, b) {
-        final ad = a.lastSaleAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-        final bd = b.lastSaleAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-        return bd.compareTo(ad);
+        final c = b.day.compareTo(a.day);
+        if (c != 0) return c;
+        return a.shop.compareTo(b.shop);
       });
     return rows;
   }
 
-  Widget _buildTable(List<_ShopRow> rows, DateTime from, DateTime to) {
-    _lastRows = rows;
-    _lastFrom = from;
-    _lastTo = to;
+  Widget _buildTablePerDay(List<_DayRow> rows) {
+    _exportRows = rows;
+    if (rows.isNotEmpty) {
+      _lastFrom = rows.last.day;
+      _lastTo = rows.first.day.add(const Duration(days: 1));
+    } else {
+      _lastFrom = null;
+      _lastTo = null;
+    }
 
     final now = DateTime.now();
-    final isDailyOrSpecific = _period == 'Daily' || _period == 'Specific Date';
-    final isToday = isDailyOrSpecific &&
-        from.year == now.year &&
-        from.month == now.month &&
-        from.day == now.day;
-    final afterCutoff = now.hour >= _cutoffHour;
 
-    final periodText = _labelForRange(from, to);
+    final app = context.read<AppDataProvider>();
+    final canEditDelete = (app.isAdmin == true) || (app.isManager == true);
+
     final headerStyle = TextStyle(
       fontWeight: FontWeight.w700,
       color: Theme.of(context).colorScheme.onSurface,
     );
-
-    final app = context.read<AppDataProvider>();
-    final canEditDelete = (app.isAdmin == true) || (app.isManager == true);
 
     return Scrollbar(
       child: SingleChildScrollView(
@@ -415,63 +431,109 @@ class _SalesScreenState extends State<SalesScreen> {
           constraints: const BoxConstraints(minWidth: 920),
           child: SingleChildScrollView(
             child: DataTableTheme(
-              data: DataTableThemeData(headingTextStyle: headerStyle),
+              data: DataTableThemeData(
+                headingTextStyle: headerStyle,
+                columnSpacing: 12,            // tighter columns
+                horizontalMargin: 8,          // minimal side gutter
+                dataRowMinHeight: 34,         // compact rows
+                dataRowMaxHeight: 38,
+                headingRowHeight: 36,
+              ),
               child: DataTable(
-                headingRowHeight: 40,
                 columns: const [
                   DataColumn(label: Text('Shop')),
-                  DataColumn(label: Text('Period')),
-                  DataColumn(label: Text('Total')),
-                  DataColumn(label: Text('Employee')),
                   DataColumn(label: Text('Cash')),
                   DataColumn(label: Text('Card')),
                   DataColumn(label: Text('Other')),
+                  DataColumn(label: Text('Date')),
+                  DataColumn(label: Text('Total')),
+                  DataColumn(label: Text('Employee')),
                   DataColumn(label: Text('Actions')),
                 ],
                 rows: rows.map((r) {
-                  final hasSale =
-                      (r.total > 0) || (r.cash > 0) || (r.card > 0) || (r.other > 0);
+                  final isToday = r.day.year == now.year &&
+                      r.day.month == now.month &&
+                      r.day.day == now.day;
+                  final hasSale = (r.total > 0) ||
+                      (r.cash > 0) ||
+                      (r.card > 0) ||
+                      (r.other > 0);
+                  final afterCutoff = now.hour >= _cutoffHour;
+                  final danger = isToday && afterCutoff && !hasSale;
+
+                  final textStyle = danger
+                      ? TextStyle(
+                          color: Colors.red.shade700,
+                          fontWeight: FontWeight.w600,
+                        )
+                      : const TextStyle();
 
                   String moneyOrBlank(num v) => hasSale ? _fmtMoney(v) : '';
-                  final employeeText =
-                      hasSale && (r.employee?.isNotEmpty ?? false) ? r.employee! : '';
-
-                  final danger = isToday && afterCutoff && !hasSale;
-                  final textStyle = danger
-                      ? TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.w600)
-                      : const TextStyle();
+                  final dateText = DateFormat('dd MMM, yyyy').format(r.day);
 
                   return DataRow(
                     color: danger
                         ? WidgetStatePropertyAll(
-                            Colors.red.withValues(alpha: 0.08),
+                            Colors.red.withOpacity(0.06),
                           )
                         : null,
                     cells: [
                       DataCell(Text(r.shop, style: textStyle)),
-                      DataCell(Text(periodText, style: textStyle)),
-                      DataCell(Text(moneyOrBlank(r.total), style: textStyle)),
-                      DataCell(Text(employeeText, style: textStyle)),
                       DataCell(Text(moneyOrBlank(r.cash), style: textStyle)),
                       DataCell(Text(moneyOrBlank(r.card), style: textStyle)),
                       DataCell(Text(moneyOrBlank(r.other), style: textStyle)),
-
+                      DataCell(Text(dateText, style: textStyle)),
+                      DataCell(Text(moneyOrBlank(r.total), style: textStyle)),
+                      DataCell(
+                          Text((hasSale ? (r.employee ?? '') : ''), style: textStyle)),
                       DataCell(
                         canEditDelete
                             ? PopupMenuButton<String>(
+                                padding: EdgeInsets.zero,
                                 onSelected: (v) {
-                                  if (v == 'view') _openShopSalesDetail(r.shop, from, to);
-                                  if (v == 'edit_latest') _editLatestSaleForShop(r.shop, from, to);
-                                  if (v == 'delete_latest') _deleteLatestSaleForShop(r.shop, from, to);
-                                  if (v == 'compare_period') _compareWithTransactions(r.shop, from, to);
+                                  if (v == 'view') {
+                                    _openShopSalesDetail(
+                                      r.shop,
+                                      r.day,
+                                      r.day.add(const Duration(days: 1)),
+                                    );
+                                  }
+                                  if (v == 'edit_latest') {
+                                    _editLatestSaleForShop(
+                                      r.shop,
+                                      r.day,
+                                      r.day.add(const Duration(days: 1)),
+                                    );
+                                  }
+                                  if (v == 'delete_latest') {
+                                    _deleteLatestSaleForShop(
+                                      r.shop,
+                                      r.day,
+                                      r.day.add(const Duration(days: 1)),
+                                    );
+                                  }
+                                  if (v == 'compare_period') {
+                                    _compareWithTransactions(
+                                      r.shop,
+                                      r.day,
+                                      r.day.add(const Duration(days: 1)),
+                                    );
+                                  }
                                 },
                                 itemBuilder: (ctx) => const [
-                                  PopupMenuItem(value: 'view', child: Text('View sales')),
-                                  PopupMenuItem(value: 'edit_latest', child: Text('Edit latest')),
-                                  PopupMenuItem(value: 'delete_latest', child: Text('Delete latest')),
+                                  PopupMenuItem(
+                                      value: 'view',
+                                      child: Text('View sales (day)')),
+                                  PopupMenuItem(
+                                      value: 'edit_latest',
+                                      child: Text('Edit latest (day)')),
+                                  PopupMenuItem(
+                                      value: 'delete_latest',
+                                      child: Text('Delete latest (day)')),
                                   PopupMenuItem(
                                     value: 'compare_period',
-    child: Text('Compare with Transactions (Period)'),
+                                    child:
+                                        Text('Compare with Transactions (day)'),
                                   ),
                                 ],
                                 child: const Icon(Icons.more_horiz),
@@ -479,7 +541,11 @@ class _SalesScreenState extends State<SalesScreen> {
                             : IconButton(
                                 tooltip: 'View sales',
                                 icon: const Icon(Icons.visibility_outlined),
-                                onPressed: () => _openShopSalesDetail(r.shop, from, to),
+                                onPressed: () => _openShopSalesDetail(
+                                  r.shop,
+                                  r.day,
+                                  r.day.add(const Duration(days: 1)),
+                                ),
                               ),
                       ),
                     ],
@@ -495,7 +561,8 @@ class _SalesScreenState extends State<SalesScreen> {
 
   // --------------------- PER-SHOP DETAIL ---------------------
 
-  Future<void> _openShopSalesDetail(String shop, DateTime from, DateTime to) async {
+  Future<void> _openShopSalesDetail(
+      String shop, DateTime from, DateTime to) async {
     final app = context.read<AppDataProvider>();
     final primary = app.buildSalesQuery(from: from, to: to, shop: shop);
 
@@ -512,7 +579,8 @@ class _SalesScreenState extends State<SalesScreen> {
             builder: (ctx, snap) {
               if (snap.hasError) {
                 final err = snap.error;
-                if (err is FirebaseException && err.code == 'failed-precondition') {
+                if (err is FirebaseException &&
+                    err.code == 'failed-precondition') {
                   return FutureBuilder<QuerySnapshot<Map<String, dynamic>>>(
                     future: app.buildSalesQueryLoose(shop: shop).get(),
                     builder: (ctx, fs) {
@@ -565,20 +633,22 @@ class _SalesScreenState extends State<SalesScreen> {
       body: rows.isEmpty
           ? const Center(child: Text('No sales found for this period'))
           : ListView.separated(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(10),
               itemCount: rows.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 8),
+              separatorBuilder: (_, __) => const SizedBox(height: 6),
               itemBuilder: (_, i) {
                 final s = rows[i];
-                final when =
-                    DateFormat('dd MMM, yyyy – hh:mm a').format(s['createdAt']);
+                final when = DateFormat('dd MMM, yyyy – hh:mm a')
+                    .format(s['createdAt']);
                 final totNum = (s['total'] as num?)?.toDouble() ?? 0.0;
                 final total = totNum.toStringAsFixed(0);
                 final emp = (s['employee'] ?? '').toString();
 
                 return Card(
+                  margin: EdgeInsets.zero,
                   child: ListTile(
-                    title: Text('Rs $total',
+                    dense: true,
+                    title: Text('\$ $total',
                         style: const TextStyle(fontWeight: FontWeight.w600)),
                     subtitle: Text('By: $emp  •  $when'),
                     onTap: canEditDelete ? () => _editSale(s) : null,
@@ -590,7 +660,8 @@ class _SalesScreenState extends State<SalesScreen> {
                             },
                             itemBuilder: (ctx) => const [
                               PopupMenuItem(value: 'edit', child: Text('Edit')),
-                              PopupMenuItem(value: 'delete', child: Text('Delete')),
+                              PopupMenuItem(
+                                  value: 'delete', child: Text('Delete')),
                             ],
                           )
                         : null,
@@ -602,14 +673,11 @@ class _SalesScreenState extends State<SalesScreen> {
   }
 
   Future<Map<String, dynamic>?> _fetchLatestSaleForShop(
-    String shop, DateTime from, DateTime to,
-  ) async {
+      String shop, DateTime from, DateTime to) async {
     final app = context.read<AppDataProvider>();
     try {
-      final snap = await app
-          .buildSalesQuery(from: from, to: to, shop: shop)
-          .limit(1)
-          .get();
+      final snap =
+          await app.buildSalesQuery(from: from, to: to, shop: shop).limit(1).get();
       if (snap.docs.isEmpty) return null;
       return app.mapSaleDoc(snap.docs.first);
     } on FirebaseException catch (e) {
@@ -630,102 +698,15 @@ class _SalesScreenState extends State<SalesScreen> {
     }
   }
 
-  // 🔹 NEW: fetch only manual (employee/admin) sale — exclude transactions_close_day
-  Future<Map<String, dynamic>?> _fetchEmployeeManualSaleForShop(
-    String shop, DateTime from, DateTime to,
-  ) async {
-    final app = context.read<AppDataProvider>();
-    try {
-      final snap = await app
-          .buildSalesQuery(from: from, to: to, shop: shop)
-          .get();
-
-      Map<String, dynamic> mapDoc(QueryDocumentSnapshot<Map<String, dynamic>> d) {
-        final m = d.data();
-        DateTime created;
-        final raw = m['createdAt'];
-        if (raw is Timestamp) {
-          created = raw.toDate();
-        } else if (raw is DateTime) {
-          created = raw;
-        } else if (raw is String) {
-          created = DateTime.tryParse(raw) ?? DateTime.now();
-        } else {
-          created = DateTime.now();
-        }
-        double toD(v) =>
-            v is num ? v.toDouble() : double.tryParse('${v ?? ""}') ?? 0.0;
-
-        return {
-          'id': d.id,
-          'shop': (m['shop'] ?? '').toString(),
-          'employee': (m['employee'] ?? m['addedBy'] ?? '').toString(),
-          'cash': toD(m['cash']),
-          'card': toD(m['card']),
-          'other': toD(m['other']),
-          'total': toD(m['total']),
-          'createdAt': created,
-          'source': (m['source'] ?? '').toString(),
-        };
-      }
-
-      final items = snap.docs
-          .map(mapDoc)
-          .where((m) {
-            final src = (m['source'] ?? '').toString();
-            return src != 'transactions_close_day';
-          })
-          .toList()
-        ..sort((a, b) =>
-            (b['createdAt'] as DateTime).compareTo(a['createdAt'] as DateTime));
-
-      return items.isEmpty ? null : items.first;
-    } on FirebaseException catch (e) {
-      if (e.code == 'failed-precondition') {
-        final fs = await app.buildSalesQueryLoose(shop: shop).get();
-        final items = fs.docs
-            .map((d) {
-              final m = d.data();
-              final created = (m['createdAt'] is Timestamp)
-                  ? (m['createdAt'] as Timestamp).toDate()
-                  : DateTime.now();
-              double toD(v) =>
-                  v is num ? v.toDouble() : double.tryParse('${v ?? ""}') ?? 0.0;
-              return {
-                'id': d.id,
-                'shop': (m['shop'] ?? '').toString(),
-                'employee': (m['employee'] ?? m['addedBy'] ?? '').toString(),
-                'cash': toD(m['cash']),
-                'card': toD(m['card']),
-                'other': toD(m['other']),
-                'total': toD(m['total']),
-                'createdAt': created,
-                'source': (m['source'] ?? '').toString(),
-              };
-            })
-            .where((m) {
-              final dt = m['createdAt'] as DateTime;
-              final src = (m['source'] ?? '').toString();
-              return !dt.isBefore(from) && dt.isBefore(to) &&
-                     src != 'transactions_close_day';
-            })
-            .toList()
-          ..sort((a, b) =>
-              (b['createdAt'] as DateTime).compareTo(a['createdAt'] as DateTime));
-        return items.isEmpty ? null : items.first;
-      }
-      rethrow;
-    }
-  }
-
-  Future<void> _editLatestSaleForShop(String shop, DateTime from, DateTime to) async {
+  Future<void> _editLatestSaleForShop(
+      String shop, DateTime from, DateTime to) async {
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
 
     final s = await _fetchLatestSaleForShop(shop, from, to);
     if (s == null) {
       messenger.showSnackBar(
-        const SnackBar(content: Text('No sale to edit for this period')),
+        const SnackBar(content: Text('No sale to edit for this day')),
       );
       return;
     }
@@ -735,14 +716,15 @@ class _SalesScreenState extends State<SalesScreen> {
     );
   }
 
-  Future<void> _deleteLatestSaleForShop(String shop, DateTime from, DateTime to) async {
+  Future<void> _deleteLatestSaleForShop(
+      String shop, DateTime from, DateTime to) async {
     final app = context.read<AppDataProvider>();
     final messenger = ScaffoldMessenger.of(context);
 
     final s = await _fetchLatestSaleForShop(shop, from, to);
     if (s == null) {
       messenger.showSnackBar(
-        const SnackBar(content: Text('No sale to delete for this period')),
+        const SnackBar(content: Text('No sale to delete for this day')),
       );
       return;
     }
@@ -752,7 +734,8 @@ class _SalesScreenState extends State<SalesScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete latest sale?'),
-        content: Text('Shop: $shop\nAmount: Rs ${((s['total'] as num?)?.toDouble() ?? 0).toStringAsFixed(0)}'),
+        content: Text(
+            'Shop: $shop\nAmount: \$ ${((s['total'] as num?)?.toDouble() ?? 0).toStringAsFixed(0)}'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
@@ -796,94 +779,94 @@ class _SalesScreenState extends State<SalesScreen> {
     }
   }
 
-  // --------------------- COMPARE (TODAY) ---------------------
+  // --------------------- COMPARE ---------------------
 
-  Future<void> _compareWithTransactions(String shop, DateTime from, DateTime to) async {
-  final app = context.read<AppDataProvider>();
-  // normalize to midnight boundaries
-  final start = DateTime(from.year, from.month, from.day);
-  final endExcl = DateTime(to.year, to.month, to.day); // exclusive already
-  final isSingleDay = endExcl.difference(start).inDays == 1;
+  Future<void> _compareWithTransactions(
+      String shop, DateTime from, DateTime to) async {
+    final app = context.read<AppDataProvider>();
+    final start = DateTime(from.year, from.month, from.day);
+    final endExcl = DateTime(to.year, to.month, to.day);
 
-  // ---------- Transactions total (day-by-day aggregate if needed) ----------
-  double txCash = 0, txCard = 0, txOther = 0, txTotal = 0;
+    final isSingleDay = endExcl.difference(start).inDays == 1;
 
-  Future<void> addDayTotals(DateTime day) async {
-    final t = await app.computeDailyTransactionTotals(shop, day); // {cash, card, other, total}
-    txCash += (t['cash'] ?? 0).toDouble();
-    txCard += (t['card'] ?? 0).toDouble();
-    txOther += (t['other'] ?? 0).toDouble();
-    txTotal += (t['total'] ?? 0).toDouble();
-  }
+    double txCash = 0, txCard = 0, txOther = 0, txTotal = 0;
 
-  if (isSingleDay) {
-    await addDayTotals(start);
-  } else {
-    for (int i = 0; i < endExcl.difference(start).inDays; i++) {
-      await addDayTotals(start.add(Duration(days: i)));
+    Future<void> addDayTotals(DateTime day) async {
+      final t = await app.computeDailyTransactionTotals(shop, day);
+      txCash += (t['cash'] ?? 0).toDouble();
+      txCard += (t['card'] ?? 0).toDouble();
+      txOther += (t['other'] ?? 0).toDouble();
+      txTotal += (t['total'] ?? 0).toDouble();
     }
-  }
 
-  // ---------- Sales total (employee/admin posted) within the same period ----------
-  final salesSnap = await app
-      .buildSalesQuery(from: start, to: endExcl, shop: shop)
-      .get();
+    if (isSingleDay) {
+      await addDayTotals(start);
+    } else {
+      for (int i = 0; i < endExcl.difference(start).inDays; i++) {
+        await addDayTotals(start.add(Duration(days: i)));
+      }
+    }
 
-  double empTotal = 0;
-  for (final d in salesSnap.docs) {
-    final m = app.mapSaleDoc(d);
-    empTotal += (m['total'] as num?)?.toDouble() ?? 0.0;
-  }
+    final salesSnap =
+        await app.buildSalesQuery(from: start, to: endExcl, shop: shop).get();
 
-  final diff = txTotal - empTotal;
-  final titlePeriod = isSingleDay
-      ? DateFormat('dd MMM, yyyy').format(start)
-      : '${DateFormat('dd MMM, yyyy').format(start)} – ${DateFormat('dd MMM, yyyy').format(endExcl.subtract(const Duration(days: 1)))}';
+    double empTotal = 0;
+    for (final d in salesSnap.docs) {
+      final m = app.mapSaleDoc(d);
+      empTotal += (m['total'] as num?)?.toDouble() ?? 0.0;
+    }
 
-  if (!mounted) return;
-  showDialog(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      title: Text('Compare: $shop ($titlePeriod)'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _kv('Transactions Total', 'Rs ${txTotal.toStringAsFixed(0)}'),
-          _kv('Employee Daily Sale', 'Rs ${empTotal.toStringAsFixed(0)}'),
-          const SizedBox(height: 8),
-          const Divider(),
-          _kv('Difference', 'Rs ${diff.abs().toStringAsFixed(0)}'
-              '${diff == 0 ? '' : (diff > 0 ? '  (Tx > Sale)' : '  (Sale > Tx)')}'),
-          const SizedBox(height: 8),
-          const Text('Breakdown (Transactions):'),
-          const SizedBox(height: 4),
-          _kv('• Cash',  'Rs ${txCash.toStringAsFixed(0)}'),
-          _kv('• Card',  'Rs ${txCard.toStringAsFixed(0)}'),
-          _kv('• Other', 'Rs ${txOther.toStringAsFixed(0)}'),
+    final diff = txTotal - empTotal;
+    final titlePeriod = isSingleDay
+        ? DateFormat('dd MMM, yyyy').format(start)
+        : '${DateFormat('dd MMM, yyyy').format(start)} – ${DateFormat('dd MMM, yyyy').format(endExcl.subtract(const Duration(days: 1)))}';
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Compare: $shop ($titlePeriod)'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _kv('Transactions Total', '\$ ${txTotal.toStringAsFixed(0)}'),
+            _kv('Employee Daily Sale', '\$ ${empTotal.toStringAsFixed(0)}'),
+            const SizedBox(height: 8),
+            const Divider(),
+            _kv(
+                'Difference',
+                '\$ ${diff.abs().toStringAsFixed(0)}'
+                '${diff == 0 ? '' : (diff > 0 ? '  (Tx > Sale)' : '  (Sale > Tx)')}'),
+            const SizedBox(height: 8),
+            const Text('Breakdown (Transactions):'),
+            const SizedBox(height: 4),
+            _kv('• Cash', '\$ ${txCash.toStringAsFixed(0)}'),
+            _kv('• Card', '\$ ${txCard.toStringAsFixed(0)}'),
+            _kv('• Other', '\$ ${txOther.toStringAsFixed(0)}'),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+          if (isSingleDay && empTotal == 0 && txTotal > 0)
+            TextButton(
+              onPressed: () async {
+                Navigator.pop(ctx);
+                final err = await app.postDailySaleFromTransactions(
+                  shopName: shop,
+                  day: start,
+                );
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(err ?? 'Daily Sale created from transactions')),
+                );
+              },
+              child: const Text('Post as Daily Sale'),
+            ),
         ],
       ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
-        if (isSingleDay && empTotal == 0 && txTotal > 0) // helpful shortcut
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(ctx);
-              final err = await app.postDailySaleFromTransactions(
-                shopName: shop,
-                day: start,
-              );
-              if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(err ?? 'Daily Sale created from transactions')),
-              );
-            },
-            child: const Text('Post as Daily Sale'),
-          ),
-      ],
-    ),
-  );
-}
+    );
+  }
 
   Widget _kv(String k, String v) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 2),
@@ -896,6 +879,9 @@ class _SalesScreenState extends State<SalesScreen> {
   // --------------------- HELPERS ---------------------
 
   (DateTime, DateTime) _computeRange() {
+    final today = DateTime.now();
+    final t0 = DateTime(today.year, today.month, today.day);
+
     if (_period == 'Date Range' && _range != null) {
       final start = DateTime(_range!.start.year, _range!.start.month, _range!.start.day);
       final end = DateTime(_range!.end.year, _range!.end.month, _range!.end.day)
@@ -904,24 +890,34 @@ class _SalesScreenState extends State<SalesScreen> {
     }
 
     if (_period == 'Weekly') {
-      final start = _anchorDate.subtract(Duration(days: _anchorDate.weekday - 1));
-      final s = DateTime(start.year, start.month, start.day);
-      return (s, s.add(const Duration(days: 7)));
+      // today + previous 6 days (7 total)
+      final start = t0.subtract(const Duration(days: 6));
+      final endExcl = t0.add(const Duration(days: 1));
+      return (start, endExcl);
     }
 
     if (_period == 'Monthly') {
-      final s = DateTime(_anchorDate.year, _anchorDate.month, 1);
-      final e = DateTime(_anchorDate.year, _anchorDate.month + 1, 1);
-      return (s, e);
+      // full previous month + up to today
+      final prevMonthStart =
+          (t0.month == 1) ? DateTime(t0.year - 1, 12, 1) : DateTime(t0.year, t0.month - 1, 1);
+      final start = prevMonthStart;
+      final endExcl = t0.add(const Duration(days: 1));
+      return (start, endExcl);
     }
 
     if (_period == 'Yearly') {
-      final s = DateTime(_anchorDate.year, 1, 1);
-      final e = DateTime(_anchorDate.year + 1, 1, 1);
-      return (s, e);
+      // full previous year + up to today
+      final start = DateTime(t0.year - 1, 1, 1);
+      final endExcl = t0.add(const Duration(days: 1));
+      return (start, endExcl);
     }
 
-    final s = DateTime(_anchorDate.year, _anchorDate.month, _anchorDate.day);
+    if (_period == 'Specific Date') {
+      final s = DateTime(_anchorDate.year, _anchorDate.month, _anchorDate.day);
+      return (s, s.add(const Duration(days: 1)));
+    }
+
+    final s = DateTime(t0.year, t0.month, t0.day);
     return (s, s.add(const Duration(days: 1)));
   }
 
@@ -933,21 +929,25 @@ class _SalesScreenState extends State<SalesScreen> {
     if (_period == 'Weekly' || _period == 'Date Range') {
       return '${DateFormat('dd MMM, yyyy').format(from)} – ${DateFormat('dd MMM, yyyy').format(end)}';
     }
-    if (_period == 'Monthly') return DateFormat('MMM yyyy').format(from);
-    if (_period == 'Yearly') return DateFormat('yyyy').format(from);
+    if (_period == 'Monthly') {
+      return '${DateFormat('MMM yyyy').format(from)} – ${DateFormat('dd MMM, yyyy').format(end)}';
+    }
+    if (_period == 'Yearly') {
+      return '${DateFormat('yyyy').format(from)} – ${DateFormat('dd MMM, yyyy').format(end)}';
+    }
     return '${DateFormat('dd MMM').format(from)} – ${DateFormat('dd MMM').format(end)}';
   }
 
   String _fmtMoney(dynamic v) {
     final d = v is num ? v.toDouble() : double.tryParse('${v ?? ''}') ?? 0.0;
-    return 'Rs ${d.toStringAsFixed(0)}';
+    return '\$ ${d.toStringAsFixed(0)}';
   }
 
   // --------------------- EXPORTS ---------------------
 
   Future<void> _exportCsv() async {
     final messenger = ScaffoldMessenger.of(context);
-    if (_lastRows.isEmpty || _lastFrom == null || _lastTo == null) {
+    if (_exportRows.isEmpty) {
       messenger.showSnackBar(
         const SnackBar(content: Text('Nothing to export')),
       );
@@ -955,18 +955,18 @@ class _SalesScreenState extends State<SalesScreen> {
     }
 
     final b = StringBuffer();
-    b.writeln('Shop,Period,Total,Employee,Cash,Card,Other');
+    b.writeln('Shop,Cash,Card,Other,Date,Total,Employee');
 
-    final periodText = _labelForRange(_lastFrom!, _lastTo!);
-    for (final r in _lastRows) {
+    for (final r in _exportRows) {
+      final timeCsv = DateFormat('dd MMM, yyyy').format(r.day);
       b.writeln([
         _csvEsc(r.shop),
-        _csvEsc(periodText),
-        r.total.toStringAsFixed(0),
-        _csvEsc(r.employee ?? ''),
         r.cash.toStringAsFixed(0),
         r.card.toStringAsFixed(0),
         r.other.toStringAsFixed(0),
+        _csvEsc(timeCsv),
+        r.total.toStringAsFixed(0),
+        _csvEsc(r.employee ?? ''),
       ].join(','));
     }
 
@@ -987,7 +987,7 @@ class _SalesScreenState extends State<SalesScreen> {
 
   Future<void> _exportPdf() async {
     final messenger = ScaffoldMessenger.of(context);
-    if (_lastRows.isEmpty || _lastFrom == null || _lastTo == null) {
+    if (_exportRows.isEmpty) {
       messenger.showSnackBar(
         const SnackBar(content: Text('Nothing to export')),
       );
@@ -995,27 +995,38 @@ class _SalesScreenState extends State<SalesScreen> {
     }
 
     final pdf = pw.Document();
-    final periodText = _labelForRange(_lastFrom!, _lastTo!);
 
     pdf.addPage(
       pw.MultiPage(
         build: (ctx) => [
-          pw.Text('Sales Report',
-              style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
+          pw.Text('Sales Report (Per-Day)',
+              style:
+                  pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
           pw.SizedBox(height: 4),
-          pw.Text('Period: $periodText'),
-          pw.SizedBox(height: 12),
+          if (_lastFrom != null && _lastTo != null)
+            pw.Text(
+                'Range: ${DateFormat('dd MMM, yyyy').format(_lastFrom!)} – ${DateFormat('dd MMM, yyyy').format(_lastTo!.subtract(const Duration(days: 1)))}'),
+          pw.SizedBox(height: 10),
           pw.TableHelper.fromTextArray(
-            headers: const ['Shop', 'Period', 'Total', 'Employee', 'Cash', 'Card', 'Other'],
-            data: _lastRows.map((r) {
+            headers: const [
+              'Shop',
+              'Cash',
+              'Card',
+              'Other',
+              'Date',
+              'Total',
+              'Employee'
+            ],
+            data: _exportRows.map((r) {
+              final timeCsv = DateFormat('dd MMM, yyyy').format(r.day);
               return [
                 r.shop,
-                periodText,
-                r.total.toStringAsFixed(0),
-                r.employee ?? '',
                 r.cash.toStringAsFixed(0),
                 r.card.toStringAsFixed(0),
                 r.other.toStringAsFixed(0),
+                timeCsv,
+                r.total.toStringAsFixed(0),
+                r.employee ?? '',
               ];
             }).toList(),
             headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
@@ -1032,19 +1043,6 @@ class _SalesScreenState extends State<SalesScreen> {
         'sales_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.pdf';
     await Printing.sharePdf(bytes: bytes, filename: name);
   }
-}
-
-// Row model
-class _ShopRow {
-  _ShopRow({required this.shop});
-
-  final String shop;
-  double cash = 0.0;
-  double card = 0.0;
-  double other = 0.0;
-  double total = 0.0;
-  String? employee;
-  DateTime? lastSaleAt;
 }
 
 // ===============================================================
@@ -1112,7 +1110,7 @@ class _DailySaleFromTransactionsSheetState
 
   @override
   Widget build(BuildContext context) {
-    const currency = 'Rs';
+    const currency = '\$';
     final app = context.watch<AppDataProvider>();
     final shops = app.shops
         .where((s) => (s['isDeleted'] ?? false) != true)
@@ -1126,10 +1124,10 @@ class _DailySaleFromTransactionsSheetState
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.only(
-          left: 16,
-          right: 16,
-          bottom: 16 + MediaQuery.of(context).viewInsets.bottom,
-          top: 16,
+          left: 14,
+          right: 14,
+          bottom: 14 + MediaQuery.of(context).viewInsets.bottom,
+          top: 14,
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1138,7 +1136,7 @@ class _DailySaleFromTransactionsSheetState
               'Daily Sale from Transactions',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             DropdownButtonFormField<String>(
               value: _shop,
               items: shops
@@ -1147,7 +1145,7 @@ class _DailySaleFromTransactionsSheetState
               onChanged: (v) => setState(() => _shop = v),
               decoration: const InputDecoration(labelText: 'Shop'),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             Row(
               children: [
                 Expanded(
@@ -1160,7 +1158,7 @@ class _DailySaleFromTransactionsSheetState
                 ),
               ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             Row(
               children: [
                 Expanded(
@@ -1180,11 +1178,11 @@ class _DailySaleFromTransactionsSheetState
                 ),
               ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             if (_totals != null)
               Card(
                 child: Padding(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(10),
                   child: Column(
                     children: [
                       _row('Cash', _totals!['cash'] ?? 0, currency),
@@ -1204,7 +1202,7 @@ class _DailySaleFromTransactionsSheetState
 
   Widget _row(String label, double value, String currency, {bool bold = false}) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(
         children: [
           Text(label),

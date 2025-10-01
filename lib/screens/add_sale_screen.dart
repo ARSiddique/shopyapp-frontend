@@ -28,8 +28,20 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
   bool _loading = false;
   String? _selectedShop;
 
-  /// 'today' | 'yesterday'
+  /// Employee uses 'today' | 'yesterday'
   String _dayChoice = 'today';
+
+  /// Admin/Manager can pick any date (within configured range)
+  DateTime? _pickedDate;
+
+  bool get _isEmployee {
+    final app = context.read<AppDataProvider>();
+    final me = app.loggedInUser ?? {};
+    final role = (me['role'] ?? '').toString().toLowerCase();
+    return role == 'employee';
+  }
+
+  bool get _isAdminOrManager => !_isEmployee;
 
   @override
   void initState() {
@@ -47,13 +59,18 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     _otherC.text = _numToText(s['other']);
 
     final dt = _toDate(s['createdAt']);
-    final base = _dayOnly(DateTime.now());
     final d = _dayOnly(dt);
+
+    // employee chip mapping (only used if employee)
+    final base = _dayOnly(DateTime.now());
     if (d == base) {
       _dayChoice = 'today';
     } else if (d == base.subtract(const Duration(days: 1))) {
       _dayChoice = 'yesterday';
     }
+
+    // admin/manager direct date
+    _pickedDate = d;
   }
 
   @override
@@ -68,8 +85,6 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
   Widget build(BuildContext context) {
     final app = context.watch<AppDataProvider>();
     final me = app.loggedInUser ?? {};
-    final role = (me['role'] ?? '').toString().toLowerCase();
-    final isEmployee = role == 'employee';
 
     // All active shop names (sorted)
     final allShops = app.shops
@@ -87,7 +102,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
 
     // Shop options per role
     final shopOptions =
-        isEmployee ? allShops.where((s) => assigned.contains(s)).toList() : allShops;
+        _isEmployee ? allShops.where((s) => assigned.contains(s)).toList() : allShops;
 
     // Decide selected shop
     _selectedShop ??= (widget.existingSale?['shop']?.toString().isNotEmpty == true)
@@ -97,7 +112,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
             : (shopOptions.isNotEmpty ? shopOptions.first : null));
 
     // Employee navigation/locking logic
-    final hasMultipleAssigned = isEmployee && shopOptions.length > 1;
+    final hasMultipleAssigned = _isEmployee && shopOptions.length > 1;
     final shouldShowBackToSelection = hasMultipleAssigned;
     final appBarTitleShop = _selectedShop ?? '—';
 
@@ -105,7 +120,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     final total = _parse(_cashC.text) + _parse(_cardC.text) + _parse(_otherC.text);
 
     // PopScope controls back behavior for multi-shop employees
-    final blockBackForSingleShopEmployee = isEmployee && !hasMultipleAssigned;
+    final blockBackForSingleShopEmployee = _isEmployee && !hasMultipleAssigned;
     final interceptBackToSelection = shouldShowBackToSelection;
     final canPop = !(blockBackForSingleShopEmployee || interceptBackToSelection);
 
@@ -152,10 +167,10 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
                   key: _formKey,
                   child: ListView(
                     children: [
-                      if (isEmployee) _shopInfoCard(),
-                      if (isEmployee) const SizedBox(height: 12),
+                      if (_isEmployee) _shopInfoCard(),
+                      if (_isEmployee) const SizedBox(height: 12),
 
-                      if (!isEmployee)
+                      if (!_isEmployee)
                         DropdownButtonFormField<String>(
                           value: (_selectedShop != null &&
                                   shopOptions.contains(_selectedShop))
@@ -173,28 +188,52 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
                               (v == null || v.isEmpty) ? 'Select a shop' : null,
                         ),
 
-                      if (!isEmployee) const SizedBox(height: 16),
+                      if (!_isEmployee) const SizedBox(height: 16),
 
-                      Row(
-                        children: [
-                          Expanded(
-                            child: ChoiceChip(
-                              label: const Text('Today'),
-                              selected: _dayChoice == 'today',
-                              onSelected: (_) => setState(() => _dayChoice = 'today'),
+                      // Role-aware date controls
+                      if (_isEmployee) ...[
+                        Row(
+                          children: [
+                            Expanded(
+                              child: ChoiceChip(
+                                label: const Text('Today'),
+                                selected: _dayChoice == 'today',
+                                onSelected: (_) => setState(() => _dayChoice = 'today'),
+                              ),
                             ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: ChoiceChip(
-                              label: const Text('Yesterday'),
-                              selected: _dayChoice == 'yesterday',
-                              onSelected: (_) => setState(() => _dayChoice = 'yesterday'),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: ChoiceChip(
+                                label: const Text('Yesterday'),
+                                selected: _dayChoice == 'yesterday',
+                                onSelected: (_) => setState(() => _dayChoice = 'yesterday'),
+                              ),
                             ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                      ] else ...[
+                        OutlinedButton.icon(
+                          icon: const Icon(Icons.event),
+                          label: Text(_pickedDate == null
+                              ? 'Pick sale date'
+                              : DateFormat('dd MMM, yyyy').format(_pickedDate!)),
+                          onPressed: () async {
+                            final now = DateTime.now();
+                            final fourMonthsAgo = DateTime(now.year, now.month - 4, now.day);
+                            final picked = await showDatePicker(
+                              context: context,
+                              initialDate: _pickedDate ?? now,
+                              firstDate: fourMonthsAgo, // ~4 months back
+                              lastDate: now,            // up to today
+                            );
+                            if (picked != null) {
+                              setState(() => _pickedDate = _dayOnly(picked));
+                            }
+                          },
+                        ),
+                        const SizedBox(height: 16),
+                      ],
 
                       _amountField(_cashC, 'Cash'),
                       const SizedBox(height: 12),
@@ -243,28 +282,28 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     );
   }
 
-Widget _amountField(TextEditingController c, String label) {
-  return TextFormField(
-    controller: c,
-    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-    inputFormatters: [
-      FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
-    ],
-    decoration: InputDecoration( // ⟵ const hata diya
-      labelText: label,
-      border: const OutlineInputBorder(),
-      prefixText: r'$ ',
-    ),
-    validator: (v) {
-      if (v == null || v.trim().isEmpty) return null;
-      final d = double.tryParse(v);
-      if (d == null) return 'Invalid number';
-      if (d < 0) return 'Must be ≥ 0';
-      return null;
-    },
-    onChanged: (_) => setState(() {}),
-  );
-}
+  Widget _amountField(TextEditingController c, String label) {
+    return TextFormField(
+      controller: c,
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      inputFormatters: [
+        FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
+      ],
+      decoration: InputDecoration(
+        labelText: label,
+        border: const OutlineInputBorder(),
+        prefixText: r'$ ',
+      ),
+      validator: (v) {
+        if (v == null || v.trim().isEmpty) return null;
+        final d = double.tryParse(v);
+        if (d == null) return 'Invalid number';
+        if (d < 0) return 'Must be ≥ 0';
+        return null;
+      },
+      onChanged: (_) => setState(() {}),
+    );
+  }
 
   Widget _totalBar(double total) {
     return Container(
@@ -335,7 +374,11 @@ Widget _amountField(TextEditingController c, String label) {
   DateTime _selectedDate() {
     final now = DateTime.now();
     final base = _dayOnly(now);
-    return _dayChoice == 'today' ? base : base.subtract(const Duration(days: 1));
+    if (_isEmployee) {
+      return _dayChoice == 'today' ? base : base.subtract(const Duration(days: 1));
+    } else {
+      return _pickedDate ?? base; // admin/manager free date
+    }
   }
 
   (DateTime, DateTime) _dayBounds(DateTime date) {
@@ -375,7 +418,7 @@ Widget _amountField(TextEditingController c, String label) {
     final app = context.read<AppDataProvider>();
     final me = app.loggedInUser ?? {};
     final role = (me['role'] ?? '').toString().toLowerCase();
-  final isEmployee = role == 'employee'; // 
+    final isEmployee = role == 'employee';
     final name = (me['name'] ?? '').toString();
 
     final cash = _parse(_cashC.text);
@@ -389,7 +432,7 @@ Widget _amountField(TextEditingController c, String label) {
       final (from, _) = _dayBounds(chosen);
       final dayKey = app.dayKeyOf(chosen);
 
-      // ❗ hard duplicate check by dayKey (manual or close-day — both)
+      // ❗ unique per shop per day
       final dupQ = FirebaseFirestore.instance
           .collection('sales')
           .where('shop', isEqualTo: _selectedShop)
@@ -418,8 +461,8 @@ Widget _amountField(TextEditingController c, String label) {
         'other': other,
         'total': total,
         'createdAt': Timestamp.fromDate(createdAt),
-        'dayKey': dayKey,                 // 👈 for uniqueness & reporting
-        'source': 'employee_manual',      // 👈 provenance
+        'dayKey': dayKey,                 // for uniqueness & reporting
+        'source': 'employee_manual',      // provenance
       };
 
       await FirebaseFirestore.instance.collection('sales').add(data);
@@ -436,7 +479,7 @@ Widget _amountField(TextEditingController c, String label) {
         _otherC.clear();
         setState(() => _dayChoice = 'today');
       } else {
-        // Admin/Manager → return to previous
+        // Admin/Manager → back
         navigator.pop();
       }
     } catch (e) {
