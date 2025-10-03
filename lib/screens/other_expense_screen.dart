@@ -1,9 +1,10 @@
+// lib/screens/other_expense_screen.dart
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_data_provider.dart';
 
-const double _kRowHeight = 56;
+const double _kRowHeight = 64;
 
 class OtherExpenseScreen extends StatefulWidget {
   const OtherExpenseScreen({super.key});
@@ -33,7 +34,7 @@ class _OtherExpenseScreenState extends State<OtherExpenseScreen> {
     final list = await app.fetchOtherExpenses(
       from: start,
       to: end,
-      shopName: null, // ← no shop filter
+      shopName: null, // all shops
     );
 
     final sum = list.fold<double>(
@@ -59,89 +60,230 @@ class _OtherExpenseScreenState extends State<OtherExpenseScreen> {
   Future<void> _addExpenseDialog() async {
     final titleCtl = TextEditingController();
     final amountCtl = TextEditingController();
+    final noteCtl = TextEditingController();
     DateTime picked = DateTime.now();
 
     await showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Add other expense'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: titleCtl,
-              decoration: const InputDecoration(labelText: 'Title'),
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (ctx, setLocal) {
+          return AlertDialog(
+            title: const Text('Add Other Expense'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: titleCtl,
+                    decoration: const InputDecoration(labelText: 'Title'),
+                    textInputAction: TextInputAction.next,
+                  ),
+                  TextField(
+                    controller: amountCtl,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(labelText: 'Amount'),
+                    textInputAction: TextInputAction.next,
+                  ),
+                  TextField(
+                    controller: noteCtl,
+                    decoration:
+                        const InputDecoration(labelText: 'Note (optional)'),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      const Text('Date:'),
+                      const SizedBox(width: 8),
+                      Text(DateFormat('yyyy-MM-dd').format(picked)),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: () async {
+                          final d = await showDatePicker(
+                            context: ctx,
+                            initialDate: picked,
+                            firstDate: DateTime(2020),
+                            lastDate: DateTime(2100),
+                          );
+                          if (d != null) {
+                            setLocal(() => picked = d);
+                          }
+                        },
+                        child: const Text('Pick'),
+                      )
+                    ],
+                  ),
+                ],
+              ),
             ),
-            TextField(
-              controller: amountCtl,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(labelText: 'Amount'),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                const Text('Date:'),
-                const SizedBox(width: 8),
-                Text(DateFormat('yyyy-MM-dd').format(picked)),
-                const Spacer(),
-                TextButton(
-                  onPressed: () async {
-                    final d = await showDatePicker(
-                      context: context,
-                      initialDate: picked,
-                      firstDate: DateTime(2020),
-                      lastDate: DateTime(2100),
-                    );
-                    if (d != null) {
-                      picked = d;
-                      if (mounted) setState(() {});
-                    }
-                  },
-                  child: const Text('Pick'),
-                )
-              ],
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () async {
-              final title = titleCtl.text.trim();
-              final amount = double.tryParse(amountCtl.text.trim()) ?? 0.0;
-              if (title.isEmpty || amount <= 0) return;
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () async {
+                  final title = titleCtl.text.trim();
+                  final amount = double.tryParse(amountCtl.text.trim()) ?? 0.0;
+                  final note = noteCtl.text.trim();
+                  if (title.isEmpty || amount <= 0) return;
 
-              await context.read<AppDataProvider>().addOtherExpenseEntry(
-                    shopName: '', // not used
-                    amount: amount,
-                    title: title,
-                    when: picked,
-                  );
-              if (!mounted) return;
-              Navigator.pop(context);
-              await _load();
-            },
-            child: const Text('Save'),
-          ),
+                  await context.read<AppDataProvider>().addOtherExpenseEntry(
+                        shopName: '', // not used (global)
+                        amount: amount,
+                        title: title,
+                        note: note.isEmpty ? null : note,
+                        when: picked,
+                      );
+                  if (!mounted) return;
+                  Navigator.of(ctx).pop();
+                  await _load();
+                },
+                child: const Text('Save'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _editExpenseDialog(Map<String, dynamic> item) async {
+    final titleCtl =
+        TextEditingController(text: (item['title'] ?? '').toString());
+    final amountCtl = TextEditingController(
+      text: ((item['amount'] as num?)?.toStringAsFixed(2) ?? ''),
+    );
+    final noteCtl =
+        TextEditingController(text: (item['note'] ?? '').toString());
+    DateTime picked = (item['createdAt'] is DateTime)
+        ? item['createdAt'] as DateTime
+        : DateTime.now();
+
+    await showDialog(
+      context: context,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (ctx, setLocal) {
+          return AlertDialog(
+            title: const Text('Edit Expense'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: titleCtl,
+                    decoration: const InputDecoration(labelText: 'Title'),
+                    textInputAction: TextInputAction.next,
+                  ),
+                  TextField(
+                    controller: amountCtl,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(labelText: 'Amount'),
+                    textInputAction: TextInputAction.next,
+                  ),
+                  TextField(
+                    controller: noteCtl,
+                    decoration:
+                        const InputDecoration(labelText: 'Note (optional)'),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      const Text('Date:'),
+                      const SizedBox(width: 8),
+                      Text(DateFormat('yyyy-MM-dd').format(picked)),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: () async {
+                          final d = await showDatePicker(
+                            context: ctx,
+                            initialDate: picked,
+                            firstDate: DateTime(2020),
+                            lastDate: DateTime(2100),
+                          );
+                          if (d != null) {
+                            setLocal(() => picked = d);
+                          }
+                        },
+                        child: const Text('Pick'),
+                      )
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () async {
+                  final title = titleCtl.text.trim();
+                  final amount = double.tryParse(amountCtl.text.trim()) ?? -1;
+                  final note = noteCtl.text.trim();
+                  if (title.isEmpty || amount <= 0) return;
+
+                  await context.read<AppDataProvider>().updateOtherExpenseEntry(
+                        id: (item['id'] ?? '').toString(),
+                        amount: amount,
+                        title: title,
+                        note: note.isEmpty ? null : note,
+                        when: picked,
+                      );
+                  if (!mounted) return;
+                  Navigator.of(ctx).pop();
+                  await _load();
+                },
+                child: const Text('Update'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _confirmDelete(String id) async {
+    final app = context.read<AppDataProvider>(); // capture before await
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Expense?'),
+        content: const Text('This action cannot be undone.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Delete')),
         ],
       ),
     );
+    if (ok == true) {
+      await app.deleteOtherExpenseEntry(id);
+      if (!mounted) return;
+      await _load();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final monthStr = DateFormat('MMMM yyyy').format(_anchor);
+    final subtle =
+        Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6);
+    final stroke = Theme.of(context).dividerColor.withValues(alpha: 0.6);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Other Expense')),
+      appBar: AppBar(title: const Text('Other Expenses')),
       floatingActionButton: FloatingActionButton(
         onPressed: _addExpenseDialog,
         child: const Icon(Icons.add),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-      // full-width bottom total
-      bottomNavigationBar: SafeArea(child: _totalTile(_total)),
+      bottomNavigationBar: SafeArea(child: _totalTile(_total, context)),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
@@ -158,11 +300,15 @@ class _OtherExpenseScreenState extends State<OtherExpenseScreen> {
                       height: 44,
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
-                        border: Border.all(color: Colors.green),
+                        border: Border.all(color: stroke),
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: Text(monthStr,
-                          style: const TextStyle(fontWeight: FontWeight.w600)),
+                      child: Text(
+                        monthStr,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   ),
                   IconButton(
@@ -177,31 +323,86 @@ class _OtherExpenseScreenState extends State<OtherExpenseScreen> {
                     ? const Center(child: CircularProgressIndicator())
                     : _items.isEmpty
                         ? const Center(child: Text('No expenses this month'))
-                        : ListView.separated(
-                            itemCount: _items.length,
-                            separatorBuilder: (_, __) =>
-                                const SizedBox(height: 10),
-                            itemBuilder: (_, i) {
-                              final m = _items[i];
-                              final title = (m['title'] ?? '').toString();
-                              final amount =
-                                  (m['amount'] as num?)?.toDouble() ?? 0.0;
-                              return Container(
-                                height: _kRowHeight,
-                                padding:
-                                    const EdgeInsets.symmetric(horizontal: 14),
-                                decoration: BoxDecoration(
-                                  border: Border.all(color: Colors.green),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Row(
-                                  children: [
-                                    Expanded(child: Text(title)),
-                                    Text('\$${amount.toStringAsFixed(2)}'),
-                                  ],
-                                ),
-                              );
-                            },
+                        : RefreshIndicator(
+                            onRefresh: _load,
+                            child: ListView.separated(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              itemCount: _items.length,
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(height: 10),
+                              itemBuilder: (_, i) {
+                                final m = _items[i];
+                                final id = (m['id'] ?? '').toString();
+                                final title = (m['title'] ?? '').toString();
+                                final amount =
+                                    (m['amount'] as num?)?.toDouble() ?? 0.0;
+                                final note = (m['note'] ?? '').toString();
+                                final date = m['createdAt'] as DateTime?;
+                                final subtitle = [
+                                  if (note.isNotEmpty) note,
+                                  if (date != null)
+                                    DateFormat('yyyy-MM-dd').format(date),
+                                ].join(' • ');
+
+                                return Container(
+                                  height: _kRowHeight,
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 14),
+                                  decoration: BoxDecoration(
+                                    border: Border.all(color: stroke),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Column(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              title,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                            if (subtitle.isNotEmpty)
+                                              Text(
+                                                subtitle,
+                                                maxLines: 1,
+                                                overflow:
+                                                    TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                  fontSize: 12,
+                                                  color: subtle,
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                      Text('\$${amount.toStringAsFixed(2)}'),
+                                      const SizedBox(width: 8),
+                                      IconButton(
+                                        tooltip: 'Edit',
+                                        icon: const Icon(Icons.edit_outlined),
+                                        onPressed: () =>
+                                            _editExpenseDialog(m),
+                                      ),
+                                      IconButton(
+                                        tooltip: 'Delete',
+                                        icon:
+                                            const Icon(Icons.delete_outline),
+                                        onPressed: () =>
+                                            _confirmDelete(id),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
                           ),
               ),
               const SizedBox(height: 8),
@@ -212,24 +413,29 @@ class _OtherExpenseScreenState extends State<OtherExpenseScreen> {
     );
   }
 
-  Widget _totalTile(double total) {
+  Widget _totalTile(double total, BuildContext context) {
+    final stroke = Theme.of(context).dividerColor.withValues(alpha: 0.6);
     return Container(
       width: double.infinity,
-      height: _kRowHeight, // same height as list rows
+      height: _kRowHeight,
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       padding: const EdgeInsets.symmetric(horizontal: 14),
       decoration: BoxDecoration(
-        border: Border.all(color: Colors.green),
+        border: Border.all(color: stroke),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
         children: [
           const Expanded(
-            child: Text('Total Expense',
-                style: TextStyle(fontWeight: FontWeight.bold)),
+            child: Text(
+              'Total Expense',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
           ),
-          Text('\$${total.toStringAsFixed(2)}',
-              style: const TextStyle(fontWeight: FontWeight.bold)),
+          Text(
+            '\$${total.toStringAsFixed(2)}',
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
         ],
       ),
     );

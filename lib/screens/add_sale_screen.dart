@@ -1,3 +1,4 @@
+// lib/screens/add_sale_screen.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,8 +10,8 @@ import 'shop_selection_screen.dart';
 import 'login_screen.dart';
 
 class AddSaleScreen extends StatefulWidget {
-  final Map<String, dynamic>? existingSale; // edit flow
-  final String? shopName; // for employee/admin flow when shop preselected
+  final Map<String, dynamic>? existingSale; // edit flow source (optional)
+  final String? shopName; // pre-selected shop (optional)
 
   const AddSaleScreen({super.key, this.existingSale, this.shopName});
 
@@ -28,11 +29,8 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
   bool _loading = false;
   String? _selectedShop;
 
-  /// Employee uses 'today' | 'yesterday'
-  String _dayChoice = 'today';
-
-  /// Admin/Manager can pick any date (within configured range)
-  DateTime? _pickedDate;
+  /// Single source of truth for picked day (midnight)
+  late DateTime _selectedDay;
 
   bool get _isEmployee {
     final app = context.read<AppDataProvider>();
@@ -41,36 +39,22 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     return role == 'employee';
   }
 
-  bool get _isAdminOrManager => !_isEmployee;
-
   @override
   void initState() {
     super.initState();
-    _prefillIfEditing();
+    _selectedDay = _dayOnly(
+      _toDate(widget.existingSale?['createdAt']) ?? DateTime.now(),
+    );
+    _prefillIfEditingOnLoad();
   }
 
-  void _prefillIfEditing() {
+  void _prefillIfEditingOnLoad() {
     if (widget.existingSale == null) return;
     final s = widget.existingSale!;
     _selectedShop = (s['shop'] ?? '').toString();
-
     _cashC.text = _numToText(s['cash']);
     _cardC.text = _numToText(s['card']);
     _otherC.text = _numToText(s['other']);
-
-    final dt = _toDate(s['createdAt']);
-    final d = _dayOnly(dt);
-
-    // employee chip mapping (only used if employee)
-    final base = _dayOnly(DateTime.now());
-    if (d == base) {
-      _dayChoice = 'today';
-    } else if (d == base.subtract(const Duration(days: 1))) {
-      _dayChoice = 'yesterday';
-    }
-
-    // admin/manager direct date
-    _pickedDate = d;
   }
 
   @override
@@ -86,7 +70,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     final app = context.watch<AppDataProvider>();
     final me = app.loggedInUser ?? {};
 
-    // All active shop names (sorted)
+    // Active (non-deleted) shop names
     final allShops = app.shops
         .where((s) => (s['isDeleted'] ?? false) != true)
         .map((s) => (s['name'] ?? '').toString())
@@ -94,13 +78,13 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
         .toList()
       ..sort();
 
-    // Employee assigned shops
+    // Employee’s assigned shops
     final assigned = (me['assignedShops'] as List? ?? [])
         .map((e) => e.toString())
         .where((e) => e.isNotEmpty)
         .toSet();
 
-    // Shop options per role
+    // Options per role
     final shopOptions =
         _isEmployee ? allShops.where((s) => assigned.contains(s)).toList() : allShops;
 
@@ -111,22 +95,21 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
             ? widget.shopName
             : (shopOptions.isNotEmpty ? shopOptions.first : null));
 
-    // Employee navigation/locking logic
     final hasMultipleAssigned = _isEmployee && shopOptions.length > 1;
     final shouldShowBackToSelection = hasMultipleAssigned;
     final appBarTitleShop = _selectedShop ?? '—';
+    final isEditingSource = widget.existingSale != null;
 
-    final isEditing = widget.existingSale != null;
     final total = _parse(_cashC.text) + _parse(_cardC.text) + _parse(_otherC.text);
 
-    // PopScope controls back behavior for multi-shop employees
+    // Handle back behavior for multi-shop employees
     final blockBackForSingleShopEmployee = _isEmployee && !hasMultipleAssigned;
     final interceptBackToSelection = shouldShowBackToSelection;
     final canPop = !(blockBackForSingleShopEmployee || interceptBackToSelection);
 
     return PopScope(
       canPop: canPop,
-      onPopInvokedWithResult: (didPop, result) {
+      onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
         if (interceptBackToSelection) {
           Navigator.pushReplacement(
@@ -141,7 +124,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
           title: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(isEditing ? 'Edit Daily Sale' : 'Add Daily Sale'),
+              Text(isEditingSource ? 'Edit Daily Sale' : 'Add Daily Sale'),
               Text(appBarTitleShop, style: Theme.of(context).textTheme.bodySmall),
             ],
           ),
@@ -161,7 +144,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
         ),
         body: Padding(
           padding: const EdgeInsets.all(16),
-          child: shopOptions.isEmpty && !isEditing
+          child: shopOptions.isEmpty && !isEditingSource
               ? const Center(child: Text('No shop available to add a sale.'))
               : Form(
                   key: _formKey,
@@ -170,6 +153,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
                       if (_isEmployee) _shopInfoCard(),
                       if (_isEmployee) const SizedBox(height: 12),
 
+                      // Admin/Manager can change shop here; employee’s shop fixed
                       if (!_isEmployee)
                         DropdownButtonFormField<String>(
                           value: (_selectedShop != null &&
@@ -179,7 +163,10 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
                           items: shopOptions
                               .map((s) => DropdownMenuItem(value: s, child: Text(s)))
                               .toList(),
-                          onChanged: (v) => setState(() => _selectedShop = v),
+                          onChanged: (v) async {
+                            setState(() => _selectedShop = v);
+                            await _prefillFromServer(_selectedDay); // reload fields
+                          },
                           decoration: const InputDecoration(
                             labelText: 'Shop',
                             border: OutlineInputBorder(),
@@ -190,50 +177,34 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
 
                       if (!_isEmployee) const SizedBox(height: 16),
 
-                      // Role-aware date controls
-                      if (_isEmployee) ...[
-                        Row(
-                          children: [
-                            Expanded(
-                              child: ChoiceChip(
-                                label: const Text('Today'),
-                                selected: _dayChoice == 'today',
-                                onSelected: (_) => setState(() => _dayChoice = 'today'),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: ChoiceChip(
-                                label: const Text('Yesterday'),
-                                selected: _dayChoice == 'yesterday',
-                                onSelected: (_) => setState(() => _dayChoice = 'yesterday'),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
-                      ] else ...[
-                        OutlinedButton.icon(
-                          icon: const Icon(Icons.event),
-                          label: Text(_pickedDate == null
-                              ? 'Pick sale date'
-                              : DateFormat('dd MMM, yyyy').format(_pickedDate!)),
-                          onPressed: () async {
-                            final now = DateTime.now();
-                            final fourMonthsAgo = DateTime(now.year, now.month - 4, now.day);
-                            final picked = await showDatePicker(
-                              context: context,
-                              initialDate: _pickedDate ?? now,
-                              firstDate: fourMonthsAgo, // ~4 months back
-                              lastDate: now,            // up to today
-                            );
-                            if (picked != null) {
-                              setState(() => _pickedDate = _dayOnly(picked));
-                            }
-                          },
-                        ),
-                        const SizedBox(height: 16),
-                      ],
+                      // ======== Center Date Stepper (for everyone) ========
+                      _DateStepper(
+                        day: _selectedDay,
+                        canGoPrev: _canGoPrev(_selectedDay),
+                        canGoNext: _canGoNext(_selectedDay),
+                        onPrev: () async {
+                          final d = _selectedDay.subtract(const Duration(days: 1));
+                          await _setDayAndPrefill(d);
+                        },
+                        onNext: () async {
+                          final d = _selectedDay.add(const Duration(days: 1));
+                          await _setDayAndPrefill(d);
+                        },
+                        onPick: () async {
+                          final limits = _pickerBounds();
+                          final picked = await showDatePicker(
+                            context: context,
+                            initialDate: _selectedDay,
+                            firstDate: limits.$1,
+                            lastDate: limits.$2,
+                          );
+                          if (picked != null) {
+                            await _setDayAndPrefill(picked);
+                          }
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      // ===================================================
 
                       _amountField(_cashC, 'Cash'),
                       const SizedBox(height: 12),
@@ -248,10 +219,10 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
                       _loading
                           ? const Center(child: CircularProgressIndicator())
                           : ElevatedButton.icon(
-                              icon: Icon(isEditing ? Icons.save : Icons.add),
-                              label: Text(isEditing ? 'Update Sale' : 'Add Sale'),
+                              icon: Icon(isEditingSource ? Icons.save : Icons.add),
+                              label: Text(isEditingSource ? 'Update Sale' : 'Add Sale'),
                               onPressed:
-                                  () => isEditing ? _updateSale() : _submitSale(),
+                                  () => isEditingSource ? _updateSale() : _submitSale(),
                             ),
                     ],
                   ),
@@ -289,7 +260,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
       inputFormatters: [
         FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
       ],
-      decoration: InputDecoration(
+      decoration: InputDecoration( // (not const) — fixes "Invalid constant value"
         labelText: label,
         border: const OutlineInputBorder(),
         prefixText: r'$ ',
@@ -369,23 +340,72 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     );
   }
 
-  // ---------- Logic ----------
+  // ---------- Role/date rules ----------
 
-  DateTime _selectedDate() {
-    final now = DateTime.now();
-    final base = _dayOnly(now);
+  // Employees: only today/yesterday; Admin/Manager: last ~4 months till today
+  (DateTime, DateTime) _pickerBounds() {
+    final today = _dayOnly(DateTime.now());
     if (_isEmployee) {
-      return _dayChoice == 'today' ? base : base.subtract(const Duration(days: 1));
-    } else {
-      return _pickedDate ?? base; // admin/manager free date
+      final first = today.subtract(const Duration(days: 1));
+      return (first, today);
+    }
+    // admin/manager ~4 months back
+    final fourMonthsAgo = DateTime(today.year, today.month - 4, today.day);
+    return (_dayOnly(fourMonthsAgo), today);
+  }
+
+  bool _canGoPrev(DateTime d) {
+    final (min, _) = _pickerBounds();
+    return !_dayOnly(d).isAtSameMomentAs(min);
+  }
+
+  bool _canGoNext(DateTime d) {
+    final (_, max) = _pickerBounds();
+    return !_dayOnly(d).isAtSameMomentAs(max);
+  }
+
+  Future<void> _setDayAndPrefill(DateTime d) async {
+    final dd = _dayOnly(d);
+    setState(() => _selectedDay = dd);
+    await _prefillFromServer(dd);
+  }
+
+  Future<void> _prefillFromServer(DateTime day) async {
+    // if shop still not chosen, only update date
+    if ((_selectedShop ?? '').isEmpty) return;
+
+    try {
+      final app = context.read<AppDataProvider>();
+      final dayKey = app.dayKeyOf(day);
+      final q = FirebaseFirestore.instance
+          .collection('sales')
+          .where('shop', isEqualTo: _selectedShop)
+          .where('dayKey', isEqualTo: dayKey)
+          .limit(1);
+
+      final snap = await q.get();
+      if (!mounted) return;
+
+      if (snap.docs.isEmpty) {
+        // Empty -> clear fields
+        _cashC.text = '';
+        _cardC.text = '';
+        _otherC.text = '';
+        setState(() {}); // refresh total
+        return;
+      }
+
+      final m = snap.docs.first.data();
+      _cashC.text = _numToText(m['cash']);
+      _cardC.text = _numToText(m['card']);
+      _otherC.text = _numToText(m['other']);
+      setState(() {});
+    } catch (_) {
+      // silent; keep previous values
     }
   }
 
-  (DateTime, DateTime) _dayBounds(DateTime date) {
-    final start = _dayOnly(date);
-    final end = start.add(const Duration(days: 1));
-    return (start, end);
-  }
+  // ---------- Submit / Update ----------
 
   double _parse(String s) => double.tryParse(s.trim()) ?? 0.0;
 
@@ -395,14 +415,21 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     return (d == 0) ? '' : d.toStringAsFixed(d % 1 == 0 ? 0 : 2);
   }
 
-  DateTime _toDate(dynamic raw) {
+  DateTime? _toDate(dynamic raw) {
+    if (raw == null) return null;
     if (raw is DateTime) return raw;
     if (raw is Timestamp) return raw.toDate();
-    if (raw is String) return DateTime.tryParse(raw) ?? DateTime.now();
-    return DateTime.now();
+    if (raw is String) return DateTime.tryParse(raw);
+    return null;
   }
 
   DateTime _dayOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  (DateTime, DateTime) _dayBounds(DateTime date) {
+    final start = _dayOnly(date);
+    final end = start.add(const Duration(days: 1));
+    return (start, end);
+  }
 
   Future<void> _submitSale() async {
     final navigator = Navigator.of(context);
@@ -417,8 +444,6 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
 
     final app = context.read<AppDataProvider>();
     final me = app.loggedInUser ?? {};
-    final role = (me['role'] ?? '').toString().toLowerCase();
-    final isEmployee = role == 'employee';
     final name = (me['name'] ?? '').toString();
 
     final cash = _parse(_cashC.text);
@@ -428,11 +453,11 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
 
     setState(() => _loading = true);
     try {
-      final chosen = _selectedDate();
+      final chosen = _selectedDay;
       final (from, _) = _dayBounds(chosen);
       final dayKey = app.dayKeyOf(chosen);
 
-      // ❗ unique per shop per day
+      // Unique per shop per day
       final dupQ = FirebaseFirestore.instance
           .collection('sales')
           .where('shop', isEqualTo: _selectedShop)
@@ -450,7 +475,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
         return;
       }
 
-      // store createdAt at a fixed noon time for that day
+      // store at fixed noon time for that day
       final createdAt = DateTime(chosen.year, chosen.month, chosen.day, 12, 0);
 
       final data = {
@@ -461,8 +486,8 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
         'other': other,
         'total': total,
         'createdAt': Timestamp.fromDate(createdAt),
-        'dayKey': dayKey,                 // for uniqueness & reporting
-        'source': 'employee_manual',      // provenance
+        'dayKey': dayKey,
+        'source': 'employee_manual',
       };
 
       await FirebaseFirestore.instance.collection('sales').add(data);
@@ -471,17 +496,11 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
       if (!mounted) return;
       _showSnack(messenger, theme, 'Sale added', ok: true);
 
-      // ----- role-aware navigation after submit -----
-      if (isEmployee) {
-        // Employee: reset so he can add next day’s sale if needed
-        _cashC.clear();
-        _cardC.clear();
-        _otherC.clear();
-        setState(() => _dayChoice = 'today');
-      } else {
-        // Admin/Manager → back
-        navigator.pop();
-      }
+      // Reset for next entry (stay on same day)
+      _cashC.clear();
+      _cardC.clear();
+      _otherC.clear();
+      setState(() {});
     } catch (e) {
       if (!mounted) return;
       _showSnack(messenger, theme, 'Error: $e');
@@ -548,6 +567,65 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 3),
       ),
+    );
+  }
+}
+
+/// ======= Center Date Stepper widget =======
+class _DateStepper extends StatelessWidget {
+  final DateTime day;
+  final bool canGoPrev;
+  final bool canGoNext;
+  final VoidCallback onPrev;
+  final VoidCallback onNext;
+  final VoidCallback onPick;
+
+  const _DateStepper({
+    required this.day,
+    required this.canGoPrev,
+    required this.canGoNext,
+    required this.onPrev,
+    required this.onNext,
+    required this.onPick,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final label = DateFormat('dd MMM, yyyy').format(day);
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        IconButton(
+          tooltip: 'Previous day',
+          onPressed: canGoPrev ? onPrev : null,
+          icon: const Icon(Icons.chevron_left),
+        ),
+        InkWell(
+          onTap: onPick,
+          borderRadius: BorderRadius.circular(24),
+          child: Ink(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.green.withOpacity(0.10),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: Colors.green.withOpacity(0.65)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.event, size: 18, color: Colors.green),
+                const SizedBox(width: 6),
+                Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
+              ],
+            ),
+          ),
+        ),
+        IconButton(
+          tooltip: 'Next day',
+          onPressed: canGoNext ? onNext : null,
+          icon: const Icon(Icons.chevron_right),
+        ),
+      ],
     );
   }
 }

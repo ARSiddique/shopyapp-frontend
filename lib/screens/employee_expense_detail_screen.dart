@@ -30,8 +30,8 @@ class _EmployeeExpenseDetailScreenState
   List<Map<String, dynamic>> _rows = [];
 
   // Totals
-  double _sumAdvance = 0;   // Advance
-  double _totalPaid = 0;    // Payment + Advance
+  double _sumAdvance = 0; // Advance
+  double _totalPaid = 0; // Payment + Advance
   double _remaining = 0;
 
   double get _monthlySalary {
@@ -56,7 +56,7 @@ class _EmployeeExpenseDetailScreenState
       final list = await app.fetchEmployeeExpenses(
         from: from,
         to: to,
-        shopName: null, // 🔕 shops disabled
+        shopName: null, // shops disabled here
       );
 
       final mine = list
@@ -80,9 +80,9 @@ class _EmployeeExpenseDetailScreenState
         }
       }
 
-      final totalPaid = (paid + adv).toDouble(); // ✅ includes Advance
+      final totalPaid = (paid + adv).toDouble();
       final remaining =
-          (_monthlySalary - totalPaid).clamp(0.0, double.infinity).toDouble(); // ✅ cast to double
+          (_monthlySalary - totalPaid).clamp(0.0, double.infinity).toDouble();
 
       setState(() {
         _rows = mine;
@@ -90,13 +90,8 @@ class _EmployeeExpenseDetailScreenState
         _totalPaid = totalPaid;
         _remaining = remaining;
       });
-    } catch (_) {
-      // ignore
     } finally {
-      // ✅ no return inside finally
-      if (mounted) {
-        setState(() => _loading = false);
-      }
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -118,8 +113,9 @@ class _EmployeeExpenseDetailScreenState
       isScrollControlled: true,
       builder: (_) {
         return Padding(
-          padding:
-              EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(context).viewInsets.bottom,
+          ),
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: Form(
@@ -131,7 +127,7 @@ class _EmployeeExpenseDetailScreenState
                     mode == 'add' ? 'Add Employee Expense' : 'Edit Entry',
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
                   DropdownButtonFormField<String>(
                     value: type,
                     items: const [
@@ -143,29 +139,35 @@ class _EmployeeExpenseDetailScreenState
                     decoration: const InputDecoration(
                       labelText: 'Type',
                       border: OutlineInputBorder(),
+                      isDense: true,
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
                   TextFormField(
                     controller: amountCtrl,
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
                     decoration: const InputDecoration(
-                        labelText: 'Amount', border: OutlineInputBorder()),
+                      labelText: 'Amount',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
                     validator: (v) {
                       final d = double.tryParse(v ?? '');
                       if (d == null || d <= 0) return 'Enter amount';
                       return null;
                     },
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
                   TextFormField(
                     controller: noteCtrl,
                     decoration: const InputDecoration(
-                        labelText: 'Note (optional)',
-                        border: OutlineInputBorder()),
+                      labelText: 'Note (optional)',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
                   Row(
                     children: [
                       Expanded(
@@ -174,7 +176,7 @@ class _EmployeeExpenseDetailScreenState
                           child: const Text('Cancel'),
                         ),
                       ),
-                      const SizedBox(width: 12),
+                      const SizedBox(width: 10),
                       Expanded(
                         child: ElevatedButton(
                           onPressed: () async {
@@ -186,7 +188,7 @@ class _EmployeeExpenseDetailScreenState
 
                             if (mode == 'add') {
                               await app.addEmployeeExpense(
-                                shopName: 'All', // 🔕 shops disabled
+                                shopName: 'All',
                                 amount: amt,
                                 type: type,
                                 employeeName: widget.employeeName,
@@ -210,7 +212,7 @@ class _EmployeeExpenseDetailScreenState
                       ),
                     ],
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
                 ],
               ),
             ),
@@ -231,7 +233,7 @@ class _EmployeeExpenseDetailScreenState
 
   @override
   Widget build(BuildContext context) {
-    final monthLabel = DateFormat('MMMM yyyy').format(_month);
+    final monthLabel = DateFormat('MMM yyyy').format(_month);
 
     return Scaffold(
       appBar: AppBar(
@@ -264,12 +266,13 @@ class _EmployeeExpenseDetailScreenState
           ? const Center(child: CircularProgressIndicator())
           : Column(
               children: [
-                // Month selector
+                // Compact month selector (single chip)
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 14, 12, 6),
+                  padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
                   child: Row(
                     children: [
                       IconButton(
+                        visualDensity: VisualDensity.compact,
                         icon: const Icon(Icons.chevron_left),
                         onPressed: () {
                           setState(() =>
@@ -279,12 +282,11 @@ class _EmployeeExpenseDetailScreenState
                       ),
                       Expanded(
                         child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              vertical: 12, horizontal: 16),
+                          padding:
+                              const EdgeInsets.symmetric(vertical: 6, horizontal: 10),
                           decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(28),
+                            borderRadius: BorderRadius.circular(24),
                             border: Border.all(
-                              // was withOpacity(.4)
                               color: Theme.of(context)
                                   .colorScheme
                                   .outline
@@ -294,14 +296,18 @@ class _EmployeeExpenseDetailScreenState
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              const Icon(Icons.calendar_month),
-                              const SizedBox(width: 8),
-                              Text(monthLabel),
+                              const Icon(Icons.calendar_month, size: 16),
+                              const SizedBox(width: 6),
+                              Text(
+                                monthLabel,
+                                style: const TextStyle(fontWeight: FontWeight.w600),
+                              ),
                             ],
                           ),
                         ),
                       ),
                       IconButton(
+                        visualDensity: VisualDensity.compact,
                         icon: const Icon(Icons.chevron_right),
                         onPressed: () {
                           setState(() =>
@@ -313,7 +319,7 @@ class _EmployeeExpenseDetailScreenState
                   ),
                 ),
 
-                // Totals
+                // Slim totals
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 12.0),
                   child: Row(
@@ -324,8 +330,6 @@ class _EmployeeExpenseDetailScreenState
                     ],
                   ),
                 ),
-
-                const SizedBox(height: 6),
 
                 // Table
                 Expanded(
@@ -341,88 +345,126 @@ class _EmployeeExpenseDetailScreenState
   Widget _pill(String title, String value) {
     final c = Theme.of(context).colorScheme;
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          // was withOpacity(.4)
-          color: c.outline.withValues(alpha: 0.45),
-        ),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: c.outline.withValues(alpha: 0.45)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(title,
               style:
-                  Theme.of(context).textTheme.labelLarge?.copyWith(height: 1)),
-          const SizedBox(height: 6),
-          Text(value,
-              style: Theme.of(context)
-                  .textTheme
-                  .titleLarge
-                  ?.copyWith(fontWeight: FontWeight.w700)),
+                  Theme.of(context).textTheme.labelSmall?.copyWith(height: 1)),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: Theme.of(context)
+                .textTheme
+                .titleSmall
+                ?.copyWith(fontWeight: FontWeight.w700),
+          ),
         ],
       ),
     );
   }
 
-  Widget _table() {
-    final rows = _rows.map((m) {
-      final id = (m['id'] ?? '').toString();
-      final type = (m['type'] ?? '').toString();
-      final amount = ((m['amount'] ?? 0) as num).toDouble();
-      final note = (m['note'] ?? '').toString();
-      final dt = (m['createdAt'] as DateTime?) ?? DateTime.now();
+Widget _table() {
+  // compact typography
+  const headStyle = TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700);
+  const cellStyle = TextStyle(fontSize: 12);
 
-      return DataRow(
-        cells: [
-          DataCell(Text(_typeTitle(type))),
-          DataCell(Align(
+  // fixed, small widths — tweak if needed
+  const wType = 86.0;
+  const wAmt  = 74.0;  // amount
+  const wNote = 96.0;
+  const wDate = 98.0;
+  const wMenu = 30.0;
+
+  final rows = _rows.map((m) {
+    final id     = (m['id'] ?? '').toString();
+    final type   = (m['type'] ?? '').toString();
+    final amount = ((m['amount'] ?? 0) as num).toDouble();
+    final note   = (m['note'] ?? '').toString();
+    final dt     = (m['createdAt'] as DateTime?) ?? DateTime.now();
+
+    return DataRow(
+      cells: [
+        DataCell(SizedBox(
+          width: wType,
+          child: Text(_typeTitle(type),
+              style: cellStyle, overflow: TextOverflow.ellipsis, maxLines: 1),
+        )),
+        DataCell(SizedBox(
+          width: wAmt,
+          child: Align(
             alignment: Alignment.centerRight,
-            child: Text(_money(amount)),
-          )),
-          DataCell(SizedBox(
-            width: 140, // keep note compact to avoid big perceived gaps
-            child: Text(
-              note.isEmpty ? '—' : note,
-              overflow: TextOverflow.ellipsis,
-            ),
-          )),
-          DataCell(Text(_fmtDate.format(dt))),
-          DataCell(Text(_fmtTime.format(dt))),
-          DataCell(_rowMenu(id, type, amount, note)),
-        ],
-      );
-    }).toList();
-
-    return Scrollbar(
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minWidth: 720),
-          child: SingleChildScrollView(
-            child: DataTable(
-              columnSpacing: 18,
-              horizontalMargin: 12,
-              headingRowHeight: 40,
-              dataRowMinHeight: 40,
-              dataRowMaxHeight: 44,
-              columns: const [
-                DataColumn(label: Text('Type')),
-                DataColumn(label: Text('Amount'), numeric: true),
-                DataColumn(label: Text('Note')),
-                DataColumn(label: Text('Date')),
-                DataColumn(label: Text('Time')),
-                DataColumn(label: Text('')),
-              ],
-              rows: rows,
-            ),
+            child: Text(_money(amount), style: cellStyle, maxLines: 1),
           ),
+        )),
+        DataCell(SizedBox(
+          width: wNote,
+          child: Text(
+            note.isEmpty ? '—' : note,
+            style: cellStyle,
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
+          ),
+        )),
+        DataCell(SizedBox(
+          width: wDate,
+          child: Text(_fmtDate.format(dt),
+              style: cellStyle, overflow: TextOverflow.ellipsis, maxLines: 1),
+        )),
+        DataCell(SizedBox(width: wMenu, child: _rowMenu(id, type, amount, note))),
+      ],
+    );
+  }).toList();
+
+  return Scrollbar(
+    child: SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Align(
+        alignment: Alignment.topLeft,
+        child: DataTable(
+          // 🔧 super compact layout
+          columnSpacing: 4,
+          horizontalMargin: 4,
+          headingRowHeight: 26,
+          dataRowMinHeight: 26,
+          dataRowMaxHeight: 30,
+          dividerThickness: 0.4,
+          // NOTE: don't use `numeric:true` so header aligns exactly like cells
+          columns: const [
+            DataColumn(
+              label: SizedBox(width: wType, child: Text('Type', style: headStyle)),
+            ),
+            DataColumn(
+              label: SizedBox(
+                width: wAmt,
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: Text('Amount', style: headStyle),
+                ),
+              ),
+            ),
+            DataColumn(
+              label: SizedBox(width: wNote, child: Text('Note', style: headStyle)),
+            ),
+            DataColumn(
+              label: SizedBox(width: wDate, child: Text('Date', style: headStyle)),
+            ),
+            DataColumn(
+              label: SizedBox(width: wMenu, child: Text('', style: headStyle)),
+            ),
+          ],
+          rows: rows,
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _rowMenu(String id, String type, double amount, String note) {
     return PopupMenuButton<String>(

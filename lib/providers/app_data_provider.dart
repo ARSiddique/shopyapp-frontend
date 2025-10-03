@@ -2663,6 +2663,68 @@ Future<List<Map<String, dynamic>>> fetchWholesalerInvoicesByName({
   }).toList();
 }
 
+
+Future<double> sumCashPickedBetween({
+  required DateTime from,
+  required DateTime to,      // 'to' exclusive aa rahi hoti hai tumhari screens me
+  String? shopName,          // null/'All' => all shops
+}) async {
+  // dayKey helpers
+  String k(DateTime d) =>
+      DateFormat('yyyy-MM-dd').format(DateTime(d.year, d.month, d.day));
+
+  final startKey = k(from);
+  final endInc   = DateTime(to.year, to.month, to.day).subtract(const Duration(days: 1));
+  final endKey   = k(endInc);
+
+  // ⚠️ Sirf 1 field (dayKey) par range => NO composite index required
+  Query<Map<String, dynamic>> q = FirebaseFirestore.instance
+      .collection('cash_collect')
+      .where('dayKey', isGreaterThanOrEqualTo: startKey)
+      .where('dayKey', isLessThanOrEqualTo: endKey);
+
+  final snap = await q.get();
+
+  double sum = 0.0;
+  for (final d in snap.docs) {
+    final m = d.data();
+
+    // client-side filters (index ki need se bachne ke liye)
+    if (shopName != null && shopName.isNotEmpty && shopName != 'All') {
+      final sn = (m['shopName'] ?? '').toString();
+      if (sn != shopName) continue;
+    }
+    if (m['collected'] != true) continue;
+
+    final v = m['cashAmount'];
+    sum += (v is num) ? v.toDouble() : (double.tryParse('${v ?? ''}') ?? 0.0);
+  }
+  return sum;
+}
+
+
+
+Future<void> updateOtherExpenseEntry({
+  required String id,
+  required double amount,
+  required String title,
+  String? note,
+  DateTime? when,
+}) async {
+  await firestore.collection('expenses').doc(id).update({
+    'amount': amount,
+    'category': title,
+    'note': note ?? '',
+    'createdAt': Timestamp.fromDate(when ?? DateTime.now()),
+    'updatedAt': FieldValue.serverTimestamp(),
+  });
+}
+
+// Delete an "other expense" document by id.
+Future<void> deleteOtherExpenseEntry(String id) async {
+  await firestore.collection('expenses').doc(id).delete();
+}
+
 // ===== REPLACE THIS WHOLE FUNCTION =====
 Future<List<Map<String, dynamic>>> fetchWholesalerPaymentsByName({
   required DateTime from,

@@ -1,3 +1,4 @@
+// lib/screens/employee_expense_screen.dart
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
@@ -5,7 +6,10 @@ import 'package:provider/provider.dart';
 import '../providers/app_data_provider.dart';
 
 class EmployeeExpenseScreen extends StatefulWidget {
-  const EmployeeExpenseScreen({super.key});
+  /// If provided, the screen is locked to this employee (no employee dropdown).
+  const EmployeeExpenseScreen({super.key, this.employeeName});
+
+  final String? employeeName;
 
   @override
   State<EmployeeExpenseScreen> createState() => _EmployeeExpenseScreenState();
@@ -30,13 +34,16 @@ class _EmployeeExpenseScreenState extends State<EmployeeExpenseScreen> {
   String? _formEmployee;
   String _formType = 'salary';
 
+  bool get _lockedEmployee => (widget.employeeName != null && widget.employeeName!.trim().isNotEmpty);
+
   @override
   void initState() {
     super.initState();
-    // initial load async after first frame
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _load();
-    });
+    // If a specific employee is provided, lock the filter to that name.
+    if (_lockedEmployee) {
+      _employee = widget.employeeName!.trim();
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
   @override
@@ -63,9 +70,12 @@ class _EmployeeExpenseScreenState extends State<EmployeeExpenseScreen> {
       shopName: _shop == 'All' ? null : _shop,
     );
 
-    if (_employee != 'All') {
-      list = list.where((e) => (e['employeeName'] ?? '') == _employee).toList();
+    // Apply employee filter (locked if employeeName passed)
+    final selectedEmployee = _lockedEmployee ? widget.employeeName! : _employee;
+    if (selectedEmployee != 'All') {
+      list = list.where((e) => (e['employeeName'] ?? '') == selectedEmployee).toList();
     }
+
     if (_type != 'All') {
       list = list.where((e) => (e['type'] ?? '') == _type).toList();
     }
@@ -113,8 +123,15 @@ class _EmployeeExpenseScreenState extends State<EmployeeExpenseScreen> {
     ];
 
     _formShop = _shop == 'All' ? (shops.isNotEmpty ? shops.first : null) : _shop;
-    _formEmployee =
-        _employee == 'All' ? (employees.isNotEmpty ? employees.first : null) : _employee;
+
+    // If locked, always use the provided employee; otherwise use current filter or first in list
+    if (_lockedEmployee) {
+      _formEmployee = widget.employeeName!;
+    } else {
+      _formEmployee =
+          _employee == 'All' ? (employees.isNotEmpty ? employees.first : null) : _employee;
+    }
+
     _formType = 'salary';
     _amountCtrl.text = '';
     _noteCtrl.text = '';
@@ -138,15 +155,24 @@ class _EmployeeExpenseScreenState extends State<EmployeeExpenseScreen> {
                 decoration: const InputDecoration(labelText: 'Shop'),
               ),
               const SizedBox(height: 8),
-              // Employee
-              DropdownButtonFormField<String>(
-                value: _formEmployee,
-                items: employees
-                    .map((n) => DropdownMenuItem<String>(value: n, child: Text(n)))
-                    .toList(),
-                onChanged: (v) => _formEmployee = v,
-                decoration: const InputDecoration(labelText: 'Employee'),
-              ),
+
+              // Employee (hidden when locked; show read-only preview instead)
+              if (_lockedEmployee)
+                TextFormField(
+                  enabled: false,
+                  initialValue: widget.employeeName!,
+                  decoration: const InputDecoration(labelText: 'Employee'),
+                )
+              else
+                DropdownButtonFormField<String>(
+                  value: _formEmployee,
+                  items: employees
+                      .map((n) => DropdownMenuItem<String>(value: n, child: Text(n)))
+                      .toList(),
+                  onChanged: (v) => _formEmployee = v,
+                  decoration: const InputDecoration(labelText: 'Employee'),
+                ),
+
               const SizedBox(height: 8),
               // Type
               DropdownButtonFormField<String>(
@@ -271,7 +297,10 @@ class _EmployeeExpenseScreenState extends State<EmployeeExpenseScreen> {
       builder: (_) => AlertDialog(
         title: const Text('Delete this expense?'),
         content: Text(
-            'Employee: ${row['employeeName']}\nAmount: ${_money(row['amount'] ?? 0)}\nType: ${(row['type'] ?? '').toString().toUpperCase()}'),
+          'Employee: ${row['employeeName']}\n'
+          'Amount: ${_money(row['amount'] ?? 0)}\n'
+          'Type: ${(row['type'] ?? '').toString().toUpperCase()}',
+        ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
           FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
@@ -288,13 +317,19 @@ class _EmployeeExpenseScreenState extends State<EmployeeExpenseScreen> {
   Widget build(BuildContext context) {
     final app = context.watch<AppDataProvider>();
 
-    final shopNames = <String>['All', ...app.shops
-        .map((s) => (s['name'] ?? s['shopName'] ?? '').toString())
-        .where((e) => e.trim().isNotEmpty)
-        .toSet()];
+    final shopNames = <String>{
+      'All',
+      ...app.shops
+          .map((s) => (s['name'] ?? s['shopName'] ?? '').toString())
+          .where((e) => e.trim().isNotEmpty),
+    }.toList();
 
-    final employeeNames =
-        <String>['All', ...app.employees.map((e) => (e['name'] ?? '').toString()).where((e) => e.isNotEmpty)];
+    final employeeNames = <String>{
+      'All',
+      ...app.employees
+          .map((e) => (e['name'] ?? '').toString())
+          .where((e) => e.isNotEmpty),
+    }.toList();
 
     // summary for current filter (month x shop x employee)
     double sumSalary = 0, sumAdvance = 0, sumPaid = 0;
@@ -307,9 +342,13 @@ class _EmployeeExpenseScreenState extends State<EmployeeExpenseScreen> {
     }
     final remaining = (sumSalary + sumAdvance) - sumPaid;
 
+    final titleText = _lockedEmployee
+        ? 'Employee Expenses — ${widget.employeeName}'
+        : 'Employee Expenses';
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Employee Expenses'),
+        title: Text(titleText),
         actions: [
           IconButton(onPressed: _loading ? null : _load, icon: const Icon(Icons.refresh)),
           IconButton(onPressed: _openAddDialog, icon: const Icon(Icons.add)),
@@ -341,17 +380,26 @@ class _EmployeeExpenseScreenState extends State<EmployeeExpenseScreen> {
                     _load();
                   },
                 ),
-                DropdownButton<String>(
-                  value: _employee,
-                  items: employeeNames
-                      .map((n) => DropdownMenuItem<String>(value: n, child: Text(n)))
-                      .toList(),
-                  onChanged: (v) {
-                    if (v == null) return;
-                    setState(() => _employee = v);
-                    _load();
-                  },
-                ),
+
+                // Hide the employee dropdown if locked to a specific employee
+                if (!_lockedEmployee)
+                  DropdownButton<String>(
+                    value: _employee,
+                    items: employeeNames
+                        .map((n) => DropdownMenuItem<String>(value: n, child: Text(n)))
+                        .toList(),
+                    onChanged: (v) {
+                      if (v == null) return;
+                      setState(() => _employee = v);
+                      _load();
+                    },
+                  )
+                else
+                  InputChip(
+                    label: Text(widget.employeeName!),
+                    onDeleted: null, // read-only; indicates locked filter
+                  ),
+
                 DropdownButton<String>(
                   value: _type,
                   items: const [
@@ -440,9 +488,13 @@ class _EmployeeExpenseScreenState extends State<EmployeeExpenseScreen> {
           children: [
             Text(title, style: const TextStyle(fontSize: 12, color: Colors.black54)),
             const SizedBox(height: 6),
-            Text(value,
-                style: TextStyle(
-                    fontSize: 18, fontWeight: emphasize ? FontWeight.w800 : FontWeight.w700)),
+            Text(
+              value,
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: emphasize ? FontWeight.w800 : FontWeight.w700,
+              ),
+            ),
           ],
         ),
       ),

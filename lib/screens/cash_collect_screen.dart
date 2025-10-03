@@ -12,7 +12,6 @@ import 'package:csv/csv.dart';
 
 import '../providers/app_data_provider.dart';
 
-/// ====== Theme tokens (match your app) ======
 const _neon = Color(0xFF00FFC6);
 const _danger = Color(0xFFFF6B6B);
 const _mutedStroke = Color(0x22FFFFFF);
@@ -28,30 +27,27 @@ class CashCollectScreen extends StatefulWidget {
 class _CashCollectScreenState extends State<CashCollectScreen> {
   final _df = DateFormat('dd MMM, yyyy');
 
-  // Defaults
   String _shopFilter = 'All';
   _Period _period = _Period.daily;
-  DateTime _anchor = DateTime.now(); // only for Daily/Specific/Range
+  DateTime _anchor = DateTime.now();
 
-  // rows to render/export
   List<_RowVM> _rows = const [];
-
-  // provider subscription to refresh automatically
   AppDataProvider? _appSub;
 
-  // header visual constants (extra tight)
-  static const double _kMinTableWidth = 420;
   static const double _kHeaderHeight = 34;
   static const double _kGapBelowHeader = 4;
 
   @override
   void initState() {
     super.initState();
-    // as soon as we land, build once AND subscribe to provider changes
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
-      _appSub = context.read<AppDataProvider>();
-      _appSub?.addListener(_rebuild); // live refresh when provider updates
+      final app = context.read<AppDataProvider>();
+      // ensure sales loaded for computeCashForShop()
+      if ((app.sales as List?)?.isEmpty ?? true) {
+        await app.fetchSales();
+      }
+      _appSub = app..addListener(_rebuild);
       _rebuild();
     });
   }
@@ -65,7 +61,6 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // keep a handle if provider instance itself changes (hot reload etc.)
     final app = context.read<AppDataProvider>();
     if (!identical(app, _appSub)) {
       _appSub?.removeListener(_rebuild);
@@ -78,6 +73,59 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
     final rows = await _buildRows(app);
     if (!mounted) return;
     setState(() => _rows = rows);
+  }
+
+  // ===== NEW: Totals (Total / Picked / Not Picked) =====
+  ({double total, double picked, double notPicked}) _rollup() {
+    double total = 0, picked = 0, notPicked = 0;
+    for (final r in _rows) {
+      if (r.hasSale) {
+        total += r.cash.toDouble();
+        if (r.collected) picked += r.cash.toDouble();
+      }
+    }
+    notPicked = (total - picked).clamp(0.0, double.infinity);
+    return (total: total, picked: picked, notPicked: notPicked);
+  }
+
+  Widget _totalsBar() {
+    final t = _rollup();
+    String m(double v) => v.toStringAsFixed(2);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: _mutedFill,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _mutedStroke),
+      ),
+      child: Row(
+        children: [
+          Expanded(child: _pill('Total Cash', '\$ ${m(t.total)}')),
+          const SizedBox(width: 8),
+          Expanded(child: _pill('Cash Picked', '\$ ${m(t.picked)}')),
+          const SizedBox(width: 8),
+          Expanded(child: _pill('Cash Not Picked', '\$ ${m(t.notPicked)}')),
+        ],
+      ),
+    );
+  }
+
+  Widget _pill(String title, String value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white.withOpacity(0.12)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: const TextStyle(fontSize: 12, color: Colors.white70)),
+          const SizedBox(height: 4),
+          Text(value, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+        ],
+      ),
+    );
   }
 
   // ---- Exports ----
@@ -94,8 +142,7 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
     ];
     final csv = const ListToCsvConverter().convert(data);
     final dir = await getTemporaryDirectory();
-    final file = File(
-        '${dir.path}/cash_collect_${DateTime.now().millisecondsSinceEpoch}.csv');
+    final file = File('${dir.path}/cash_collect_${DateTime.now().millisecondsSinceEpoch}.csv');
     await file.writeAsString(csv);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -114,13 +161,11 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
             crossAxisAlignment: pw.CrossAxisAlignment.start,
             children: [
               pw.Text('Cash Collect (Per-Day)',
-                  style: pw.TextStyle(
-                      fontSize: 18, fontWeight: pw.FontWeight.bold)),
+                  style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
               pw.SizedBox(height: 6),
               pw.TableHelper.fromTextArray(
                 cellAlignment: pw.Alignment.centerLeft,
-                headerDecoration:
-                    const pw.BoxDecoration(color: PdfColors.grey300),
+                headerDecoration: const pw.BoxDecoration(color: PdfColors.grey300),
                 headers: const ['Shop', 'Date', 'Cash', 'Collected'],
                 data: _rows
                     .map((r) => [
@@ -139,12 +184,10 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
     await Printing.layoutPdf(onLayout: (format) async => doc.save());
   }
 
-  // ---- UI ----
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppDataProvider>();
 
-    // shops (deleted hide)
     final shops = (app.shops as List? ?? const [])
         .where((e) => (e['isDeleted'] ?? false) != true)
         .map((e) => (e['name'] ?? '').toString())
@@ -152,7 +195,6 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
         .toList()
       ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
 
-    // if data arrives later, auto rebuild (defensive)
     if (_rows.isEmpty &&
         (app.sales as List? ?? const []).isNotEmpty &&
         (app.shops as List? ?? const []).isNotEmpty) {
@@ -187,7 +229,6 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
           padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
           child: Column(
             children: [
-              // Filters (extra tight)
               _FilterDropdown(
                 label: 'Shop',
                 value: _shopFilter,
@@ -216,7 +257,7 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
                   final picked = await showDatePicker(
                     context: context,
                     firstDate: DateTime(2022),
-                    lastDate: DateTime.now(), // future ignored
+                    lastDate: DateTime.now(),
                     initialDate: _anchor,
                   );
                   if (!mounted) return;
@@ -226,9 +267,13 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
                   }
                 },
               ),
+
+              const SizedBox(height: 8),
+              // ===== NEW: Totals Bar =====
+              _totalsBar(),
               const SizedBox(height: 8),
 
-              // Table (4 primary columns always visible, no horizontal scroll needed)
+              // Table
               Expanded(
                 child: Column(
                   children: [
@@ -239,14 +284,12 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
                           ? Center(
                               child: Text(
                                 'No rows for selected period.',
-                                style: TextStyle(
-                                    color: Colors.white.withOpacity(0.75)),
+                                style: TextStyle(color: Colors.white.withOpacity(0.75)),
                               ),
                             )
                           : ListView.separated(
                               itemCount: _rows.length,
-                              separatorBuilder: (_, __) =>
-                                  const SizedBox(height: 4),
+                              separatorBuilder: (_, __) => const SizedBox(height: 4),
                               itemBuilder: (ctx, i) {
                                 final r = _rows[i];
                                 return _DataRow(
@@ -256,15 +299,12 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
                                       : () async {
                                           await _setCollected(r, true);
                                           if (!mounted) return;
-                                          ScaffoldMessenger.of(context)
-                                              .showSnackBar(
+                                          ScaffoldMessenger.of(context).showSnackBar(
                                             SnackBar(
-                                              content: const Text(
-                                                  'Marked Collected'),
+                                              content: const Text('Marked Collected'),
                                               action: SnackBarAction(
                                                 label: 'UNDO',
-                                                onPressed: () =>
-                                                    _setCollected(r, false),
+                                                onPressed: () => _setCollected(r, false),
                                               ),
                                             ),
                                           );
@@ -283,9 +323,7 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
     );
   }
 
-  /// Build per-day × per-shop rows (aaj-inclusive windows)
   Future<List<_RowVM>> _buildRows(AppDataProvider app) async {
-    // shop names (deleted hidden)
     final allShopNames = (app.shops as List? ?? const [])
         .where((e) => (e['isDeleted'] ?? false) != true)
         .map((e) => (e['name'] ?? '').toString())
@@ -295,11 +333,9 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
 
     final List<String> shopNames = _shopFilter == 'All'
         ? allShopNames
-        : allShopNames
-            .where((s) => s.toLowerCase() == _shopFilter.toLowerCase())
-            .toList();
+        : allShopNames.where((s) => s.toLowerCase() == _shopFilter.toLowerCase()).toList();
 
-    final (DateTime from, DateTime to) = _periodBounds(); // inclusive both ends
+    final (DateTime from, DateTime to) = _periodBounds();
     final days = <DateTime>[];
     for (DateTime d = from;
         !d.isAfter(to);
@@ -311,16 +347,14 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
 
     for (final day in days.reversed) {
       final dayStart = DateTime(day.year, day.month, day.day);
-      final dayEnd = dayStart; // mixin treats from..to inclusive on YMD
+      final dayEnd = dayStart;
 
       final items = await Future.wait(shopNames.map((_shopName) async {
         final shopId = app.shopIdForName(_shopName) ?? '';
         if (shopId.isEmpty) return null;
 
-        // cash for this single day using mixin
         final cash = app.computeCashForShop(shopId, dayStart, dayEnd);
 
-        // was there any sale submitted that day?
         final hasSale = app.sales.any((s) {
           final sid = (s['shopId'] ?? s['shop'] ?? '').toString().trim();
           if (sid != shopId) return false;
@@ -328,21 +362,16 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
           if (saleDateStr.length < 10) return false;
           try {
             final p = saleDateStr.split('-');
-            final sd =
-                DateTime(int.parse(p[0]), int.parse(p[1]), int.parse(p[2]));
-            return sd.year == dayStart.year &&
-                sd.month == dayStart.month &&
-                sd.day == dayStart.day;
+            final sd = DateTime(int.parse(p[0]), int.parse(p[1]), int.parse(p[2]));
+            return sd.year == dayStart.year && sd.month == dayStart.month && sd.day == dayStart.day;
           } catch (_) {
             return false;
           }
         });
 
-        // collected for day window
         bool collected = false;
         try {
-          collected = await app.isCashCollected(
-              shopId: shopId, from: dayStart, to: dayEnd);
+          collected = await app.isCashCollected(shopId: shopId, from: dayStart, to: dayEnd);
         } catch (_) {}
 
         return _RowVM(
@@ -358,7 +387,6 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
       rows.addAll(items.whereType<_RowVM>());
     }
 
-    // keep order by date desc, then shop asc
     rows.sort((a, b) {
       final c = b.day.compareTo(a.day);
       if (c != 0) return c;
@@ -385,10 +413,6 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
     setState(() => row.collected = collected);
   }
 
-  /// Aaj-inclusive **rolling** windows (future ignored)
-  /// Weekly: today + previous 6 days (7 total)
-  /// Monthly: today + previous 30 days (31 total)
-  /// Yearly: today + previous 365 days (366 total)
   (DateTime, DateTime) _periodBounds() {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
@@ -398,29 +422,22 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
         final d = DateTime(_anchor.year, _anchor.month, _anchor.day);
         final capped = d.isAfter(today) ? today : d;
         return (capped, capped);
-
       case _Period.weekly:
         final start = today.subtract(const Duration(days: 6));
         return (start, today);
-
       case _Period.monthly:
         final start = today.subtract(const Duration(days: 30));
         return (start, today);
-
       case _Period.yearly:
         final start = today.subtract(const Duration(days: 365));
         return (start, today);
-
       case _Period.specific:
         final d = DateTime(_anchor.year, _anchor.month, _anchor.day);
         final capped = d.isAfter(today) ? today : d;
         return (capped, capped);
-
       case _Period.range:
-        final s = DateTime(_anchor.year, _anchor.month, _anchor.day)
-            .subtract(const Duration(days: 3));
-        var e = DateTime(_anchor.year, _anchor.month, _anchor.day)
-            .add(const Duration(days: 3));
+        final s = DateTime(_anchor.year, _anchor.month, _anchor.day).subtract(const Duration(days: 3));
+        var e = DateTime(_anchor.year, _anchor.month, _anchor.day).add(const Duration(days: 3));
         if (e.isAfter(today)) e = today;
         return (s.isAfter(e) ? e : s, e);
     }
@@ -435,7 +452,6 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
   }
 }
 
-/// ===== Helpers & small widgets =====
 enum _Period { daily, weekly, monthly, yearly, specific, range }
 
 extension _PeriodUi on _Period {
@@ -479,7 +495,7 @@ extension _PeriodUi on _Period {
 class _RowVM {
   final String shopId;
   final String shopName;
-  final DateTime day; // row date (midnight)
+  final DateTime day;
   final num cash;
   final bool hasSale;
   bool collected;
@@ -494,7 +510,6 @@ class _RowVM {
   });
 }
 
-/// Header order: Shop → Cash → Status → Action (extra tight)
 class _HeaderRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -560,8 +575,7 @@ class _DataRow extends StatelessWidget {
             flex: 16,
             child: Align(
               alignment: Alignment.centerLeft,
-              child: _StatusIcon(
-                  collected: data.collected, hasSale: data.hasSale),
+              child: _StatusIcon(collected: data.collected, hasSale: data.hasSale),
             ),
           ),
           Expanded(
@@ -599,7 +613,6 @@ class _StatusIcon extends StatelessWidget {
     if (collected) {
       return const Icon(Icons.check_circle, size: 18, color: Colors.greenAccent);
     }
-    // not collected -> cross (red if sale existed, grey if no sale submitted)
     return Icon(
       Icons.close_rounded,
       size: 18,
@@ -696,8 +709,7 @@ class _PeriodBadge extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 4),
-            const Icon(Icons.edit_calendar_outlined,
-                size: 16, color: Colors.white70),
+            const Icon(Icons.edit_calendar_outlined, size: 16, color: Colors.white70),
           ],
         ),
       ),

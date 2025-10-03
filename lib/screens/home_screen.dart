@@ -18,6 +18,7 @@ import '../screens/employees_overview_screen.dart';
 import 'all_shops_hub_screen.dart';
 import '../screens/wholesaler_drilldown_screen.dart';
 import '../screens/cash_collect_screen.dart';
+import '../screens/other_expense_screen.dart'; // ← FAB destination
 
 /// ========= TOKENS =========
 const _brandGradient = LinearGradient(
@@ -317,7 +318,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
   }
 
-  /// animated nebula bg
+  /// Animated nebula-like background
   Widget _animatedBG({required Widget child}) {
     return AnimatedBuilder(
       animation: _bgCtrl,
@@ -349,7 +350,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
-  /// responsive grid params
+  /// Responsive grid params
   (int cols, double aspect, double gap) _gridForWidth(double w) {
     if (w >= 1800) return (6, 1.05, 18);
     if (w >= 1200) return (4, 1.05, 16);
@@ -357,7 +358,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     return (2, 1.05, 12);
   }
 
-  /// 3D card
+  /// 3D glass action card
   Widget _interactiveGlassCard({
     required Key key,
     required IconData icon,
@@ -484,16 +485,23 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     final role = (user['role'] ?? 'employee').toString().toLowerCase();
     final isEmployee = role == 'employee';
     final isAdmin = role == 'admin';
+    final isManager = role == 'manager';
+    final isAdminOrManager = isAdmin || isManager; // ← who can see the FAB
     final employeeName = (user['name'] ?? '').toString();
-    final titleText = '${user['name'] ?? ''} (${role.isNotEmpty ? role[0].toUpperCase() + role.substring(1) : 'Employee'})';
+    final titleText =
+        '${user['name'] ?? ''} (${role.isNotEmpty ? role[0].toUpperCase() + role.substring(1) : 'Employee'})';
 
     // Employee metrics
-    final employeeOrders = app.orders.where((o) => (o['createdByName'] ?? o['employee']) == employeeName).toList();
+    final employeeOrders =
+        app.orders.where((o) => (o['createdByName'] ?? o['employee']) == employeeName).toList();
     final now = DateTime.now();
-    final todayStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-    final assignedShops = (user['assignedShops'] as List? ?? const []).map((e) => e.toString()).toList();
+    final todayStr =
+        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    final assignedShops =
+        (user['assignedShops'] as List? ?? const []).map((e) => e.toString()).toList();
     final todayShopSales = app.sales.where((s) {
-      final saleDate = s['saleDate']; final shopName = s['shop'];
+      final saleDate = s['saleDate'];
+      final shopName = s['shop'];
       return saleDate == todayStr && (isEmployee ? assignedShops.contains(shopName) : true);
     }).toList();
 
@@ -517,6 +525,24 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         appBar: _selectedIndex == 0
             ? NeonGlassAppBar(title: titleText, onLogout: _onLogoutTap)
             : null,
+
+        // ========= Admin/Manager-only FAB for Other Expense =========
+        floatingActionButton: isAdminOrManager
+            ? FloatingActionButton.extended(
+                heroTag: 'fab_other_expense',
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const OtherExpenseScreen()),
+                  );
+                },
+                icon: const Icon(Icons.add),
+                label: const Text('Other Expense'),
+              )
+            : null,
+        floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+        // ============================================================
+
         body: _animatedBG(
           child: _selectedIndex == 1
               ? const ProfileScreen()
@@ -540,12 +566,22 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                   ShaderMask(
                                     shaderCallback: (r) => _brandGradient.createShader(r),
                                     child: const Text('Dashboard Overview',
-                                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 20, letterSpacing: 0.4)),
+                                        style: TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.w900,
+                                            fontSize: 20,
+                                            letterSpacing: 0.4)),
                                   ),
                                   const SizedBox(height: 6),
-                                  Container(height: 3, width: 120,
-                                    decoration: BoxDecoration(gradient: _brandGradient, borderRadius: BorderRadius.circular(3),
-                                      boxShadow: const [BoxShadow(color: Color(0x3300FFC6), blurRadius: 8)])),
+                                  Container(
+                                      height: 3,
+                                      width: 120,
+                                      decoration: BoxDecoration(
+                                          gradient: _brandGradient,
+                                          borderRadius: BorderRadius.circular(3),
+                                          boxShadow: const [
+                                            BoxShadow(color: Color(0x3300FFC6), blurRadius: 8)
+                                          ])),
                                 ]),
                                 const SizedBox(height: 14),
 
@@ -561,45 +597,68 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                           key: const ValueKey('card_allshops'),
                                           icon: Icons.dashboard_customize,
                                           title: 'All Shops Summary',
-                                          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AllShopsHubScreen())),
+                                          onTap: () => Navigator.push(
+                                              context,
+                                              MaterialPageRoute(
+                                                  builder: (_) => const AllShopsHubScreen())),
                                         ),
                                         _interactiveGlassCard(
                                           key: const ValueKey('card_wholesalers'),
                                           icon: Icons.store_mall_directory,
                                           title: 'Wholesalers',
-                                          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const WholesalerDrilldownScreen())),
+                                          onTap: () => Navigator.push(
+                                              context,
+                                              MaterialPageRoute(
+                                                  builder: (_) =>
+                                                      const WholesalerDrilldownScreen())),
                                         ),
                                         _interactiveGlassCard(
                                           key: const ValueKey('card_employees'),
                                           icon: Icons.people,
                                           title: 'Employees',
-                                          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const EmployeesOverviewScreen())),
+                                          onTap: () => Navigator.push(
+                                              context,
+                                              MaterialPageRoute(
+                                                  builder: (_) =>
+                                                      const EmployeesOverviewScreen())),
                                         ),
                                         _interactiveGlassCard(
                                           key: const ValueKey('card_shops'),
                                           icon: Icons.store,
                                           title: 'Shops',
-                                          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AllShopsScreen())),
+                                          onTap: () => Navigator.push(
+                                              context,
+                                              MaterialPageRoute(
+                                                  builder: (_) => const AllShopsScreen())),
                                         ),
                                         _interactiveGlassCard(
                                           key: const ValueKey('card_sales'),
                                           icon: Icons.trending_up,
                                           title: 'Sales',
-                                          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SalesScreen())),
+                                          onTap: () => Navigator.push(
+                                              context,
+                                              MaterialPageRoute(
+                                                  builder: (_) => const SalesScreen())),
                                         ),
                                         _interactiveGlassCard(
                                           key: const ValueKey('card_orders'),
                                           icon: Icons.shopping_bag,
                                           title: 'Orders',
-                                          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const OrdersScreen())),
+                                          onTap: () => Navigator.push(
+                                              context,
+                                              MaterialPageRoute(
+                                                  builder: (_) => const OrdersScreen())),
                                         ),
-                                        if (isAdmin) // 👈 ONLY ADMIN
+                                        if (isAdmin) // ONLY Admin sees this card
                                           _interactiveGlassCard(
                                             key: const ValueKey('card_cash_collect'),
                                             icon: Icons.attach_money_rounded,
                                             title: 'Cash Collect',
-                                            onTap: () => Navigator.push(context,
-                                                MaterialPageRoute(builder: (_) => const CashCollectScreen())),
+                                            onTap: () => Navigator.push(
+                                                context,
+                                                MaterialPageRoute(
+                                                    builder: (_) =>
+                                                        const CashCollectScreen())),
                                           ),
                                       ],
                                     ),
@@ -618,14 +677,20 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                           icon: Icons.shopping_bag,
                                           title: 'Orders',
                                           value: employeeOrders.length.toString(),
-                                          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const OrdersScreen())),
+                                          onTap: () => Navigator.push(
+                                              context,
+                                              MaterialPageRoute(
+                                                  builder: (_) => const OrdersScreen())),
                                         ),
                                         _metricCard(
                                           key: const ValueKey('metric_sales'),
                                           icon: Icons.trending_up,
                                           title: 'Sales (Today)',
                                           value: todayShopSales.length.toString(),
-                                          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AddSaleScreen())),
+                                          onTap: () => Navigator.push(
+                                              context,
+                                              MaterialPageRoute(
+                                                  builder: (_) => const AddSaleScreen())),
                                         ),
                                       ],
                                     ),
@@ -662,7 +727,8 @@ class _FrostedBottomBar extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
         gradient: const LinearGradient(
-          begin: Alignment.topLeft, end: Alignment.bottomRight,
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
           colors: [Color(0x22FFFFFF), Color(0x12FFFFFF)],
         ),
         boxShadow: const [
@@ -702,6 +768,7 @@ class _PressHover extends StatefulWidget {
   @override
   State<_PressHover> createState() => _PressHoverState();
 }
+
 class _PressHoverState extends State<_PressHover> {
   bool _pressed = false;
   bool _hovering = false;
@@ -710,10 +777,10 @@ class _PressHoverState extends State<_PressHover> {
     return MouseRegion(
       opaque: false,
       onEnter: (_) => setState(() => _hovering = true),
-      onExit:  (_) => setState(() => _hovering = false),
+      onExit: (_) => setState(() => _hovering = false),
       child: GestureDetector(
         onTapDown: (_) => setState(() => _pressed = true),
-        onTapUp:   (_) => setState(() => _pressed = false),
+        onTapUp: (_) => setState(() => _pressed = false),
         onTapCancel: () => setState(() => _pressed = false),
         behavior: HitTestBehavior.opaque,
         child: widget.builder(_pressed, _hovering),

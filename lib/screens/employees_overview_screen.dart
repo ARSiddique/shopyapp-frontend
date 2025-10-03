@@ -1,8 +1,10 @@
 // lib/screens/employees_overview_screen.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
 import '../providers/app_data_provider.dart';
 import 'add_employee_and_access_screen.dart';
+import 'employee_expense_detail_screen.dart'; // ✅ NEW: navigate to detail
 
 class EmployeesOverviewScreen extends StatefulWidget {
   const EmployeesOverviewScreen({super.key});
@@ -17,13 +19,13 @@ class _EmployeesOverviewScreenState extends State<EmployeesOverviewScreen> {
   @override
   void initState() {
     super.initState();
-    // Avoid using BuildContext across async gaps
+    // Load employees (and shops for assignment UI) after first frame
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       final app = context.read<AppDataProvider>();
       setState(() => _loading = true);
       if (app.employees.isEmpty) {
-        await app.fetchEmployees(); // ✅ load employees only
+        await app.fetchEmployees();
       }
       if (app.shops.isEmpty) {
         await app.fetchShops();
@@ -121,7 +123,7 @@ class _EmployeesOverviewScreenState extends State<EmployeesOverviewScreen> {
                                 newAssignedShops: selected.toList(),
                               );
                               if (context.mounted) {
-                                Navigator.pop(ctx); // auto-close
+                                Navigator.pop(ctx);
                               }
                             },
                             child: const Text('Save'),
@@ -236,7 +238,7 @@ class _EmployeesOverviewScreenState extends State<EmployeesOverviewScreen> {
                             subtitle: Text(
                               storedPassword.isEmpty
                                   ? '—'
-                                  : (showPwd ? storedPassword : '•' * storedPassword.length),
+                                  : '•' * storedPassword.length,
                               style: const TextStyle(letterSpacing: 1.2),
                             ),
                             trailing: storedPassword.isEmpty
@@ -312,7 +314,7 @@ class _EmployeesOverviewScreenState extends State<EmployeesOverviewScreen> {
       ),
     );
     if (ok == true) {
-      await app.deleteEmployeeById(uid, name); // provider also guards admin
+      await app.deleteEmployeeById(uid, name);
     }
   }
 
@@ -352,7 +354,7 @@ class _EmployeesOverviewScreenState extends State<EmployeesOverviewScreen> {
     final canManage = _canManage(me);
 
     final items = app.employees
-        .where((e) => (e['role'] ?? '').toString().toLowerCase() != 'admin') // ✅ hide admin
+        .where((e) => (e['role'] ?? '').toString().toLowerCase() != 'admin') // hide admin
         .toList();
 
     return Scaffold(
@@ -495,7 +497,7 @@ class _EmpCard extends StatelessWidget {
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
-        onTap: onTap,
+        onTap: onTap, // tap card -> quick info sheet
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           child: Row(
@@ -507,6 +509,7 @@ class _EmpCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // name + role + menu
                     Row(
                       children: [
                         Expanded(
@@ -544,16 +547,14 @@ class _EmpCard extends StatelessWidget {
                         if (canManage)
                           PopupMenuButton<String>(
                             onSelected: (value) {
-                              if (value == 'edit') {
+                              if (value == 'view') {
+                                onTap();
+                              } else if (value == 'edit') {
                                 onEdit();
+                              } else if (value == 'assign') {
+                                if (uid.isNotEmpty) onAssign(uid, name);
                               } else if (value == 'delete') {
                                 onDelete();
-                              } else if (value == 'assign') {
-                                if (uid.isNotEmpty) {
-                                  onAssign(uid, name);
-                                }
-                              } else if (value == 'view') {
-                                onTap();
                               }
                             },
                             itemBuilder: (ctx) => const [
@@ -567,15 +568,41 @@ class _EmpCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 6),
                     shopPreviewBuilder(shops),
+
+                    const SizedBox(height: 10),
+
+                    // ✅ Buttons row: Expenses + (optional) Assign
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: [
+                        OutlinedButton.icon(
+                          icon: const Icon(Icons.payments_outlined, size: 18),
+                          label: const Text('Expenses'),
+                          onPressed: () {
+                            if (name.isEmpty) return;
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => EmployeeExpenseDetailScreen(
+                                  employeeName: name,
+                                  employee: emp, // pass full object (for salary, etc.)
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                        if (canManage)
+                          OutlinedButton.icon(
+                            icon: const Icon(Icons.storefront_outlined, size: 18),
+                            label: const Text('Assign shops'),
+                            onPressed: uid.isEmpty ? null : () => onAssign(uid, name),
+                          ),
+                      ],
+                    ),
                   ],
                 ),
               ),
-              const SizedBox(width: 8),
-              if (canManage)
-                OutlinedButton(
-                  onPressed: uid.isEmpty ? null : () => onAssign(uid, name),
-                  child: const Text('Assign shops'),
-                ),
             ],
           ),
         ),

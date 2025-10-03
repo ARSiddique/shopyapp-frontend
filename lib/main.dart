@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import 'package:intl/date_symbol_data_local.dart';
 
 import 'providers/app_data_provider.dart';
+import 'providers/theme_provider.dart';     // <-- add this
 import 'theme/app_theme.dart';
 import 'screens/splash_screen.dart';
 
@@ -24,6 +25,7 @@ Future<void> main() async {
   runApp(
     MultiProvider(
       providers: [
+        ChangeNotifierProvider(create: (_) => ThemeProvider()),     // <-- add
         ChangeNotifierProvider(
           create: (_) => AppDataProvider()
             ..restoreSession()
@@ -52,20 +54,22 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = context.watch<ThemeProvider>(); // <-- read provider
+
     return MaterialApp(
       title: 'Shopy App',
       debugShowCheckedModeBanner: false,
 
-      // ✅ only dark theme
-      theme: AppTheme.darkOnly,
+      // ✅ Wire themes to ThemeProvider (make sure AppTheme has both)
+      theme: AppTheme.light,            // light theme
+      darkTheme: AppTheme.dark,         // dark theme
+      themeMode: theme.isDarkMode ? ThemeMode.dark : ThemeMode.light,
 
       scrollBehavior: _AppScrollBehavior(),
 
       builder: (context, child) {
-        // lock global text scaling for stable layout
         final media = MediaQuery.of(context);
-        final clamped =
-            media.copyWith(textScaler: const TextScaler.linear(1.0));
+        final clamped = media.copyWith(textScaler: const TextScaler.linear(1.0));
         return MediaQuery(data: clamped, child: child ?? const SizedBox());
       },
 
