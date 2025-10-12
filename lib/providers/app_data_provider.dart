@@ -1763,17 +1763,21 @@ Future<String?> placeOrderUniquePerDay({
   notifyListeners();
 }
   Future<List<Map<String, dynamic>>> fetchSalesBetween({
-    required DateTime from,
-    required DateTime to,
-    String? shopName, // null => all shops
-  }) async {
-    final q = buildSalesQuery(
-        from: from,
-        to: to,
-        shop: (shopName == null || shopName == 'All') ? null : shopName);
-    final snap = await q.get();
-    return snap.docs.map(mapSaleDoc).toList();
-  }
+  required DateTime from,
+  required DateTime to,
+  String? shopName, // null => all shops
+}) async {
+  // ⚠️ No orderBy + shop filter together -> no composite index needed
+  final snap = await firestore
+      .collection('sales')
+      .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(from))
+      .where('createdAt', isLessThan: Timestamp.fromDate(to))
+      .get();
+
+  final all = snap.docs.map(mapSaleDoc).toList();
+  if (shopName == null || shopName == 'All' || shopName.isEmpty) return all;
+  return all.where((m) => (m['shop'] ?? '') == shopName).toList();
+}
 
   Future<List<Map<String, dynamic>>> fetchWholesalerInvoices({
     required DateTime from,
@@ -2666,42 +2670,43 @@ Future<List<Map<String, dynamic>>> fetchWholesalerInvoicesByName({
 
 Future<double> sumCashPickedBetween({
   required DateTime from,
-  required DateTime to,      // 'to' exclusive aa rahi hoti hai tumhari screens me
-  String? shopName,          // null/'All' => all shops
+  required DateTime to,
+  String? shopName, // null/'All' -> all shops
 }) async {
-  // dayKey helpers
-  String k(DateTime d) =>
-      DateFormat('yyyy-MM-dd').format(DateTime(d.year, d.month, d.day));
+  final start = DateTime(from.year, from.month, from.day);
+  final end   = DateTime(to.year, to.month, to.day, 23, 59, 59);
 
-  final startKey = k(from);
-  final endInc   = DateTime(to.year, to.month, to.day).subtract(const Duration(days: 1));
-  final endKey   = k(endInc);
-
-  // ⚠️ Sirf 1 field (dayKey) par range => NO composite index required
+  // ✅ Single-field range only (no equality on another field)
   Query<Map<String, dynamic>> q = FirebaseFirestore.instance
       .collection('cash_collect')
-      .where('dayKey', isGreaterThanOrEqualTo: startKey)
-      .where('dayKey', isLessThanOrEqualTo: endKey);
+      .where('from', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
+      .where('from', isLessThanOrEqualTo: Timestamp.fromDate(end));
 
+  // shopName par server-side filter hata do; client-side karenge
   final snap = await q.get();
 
   double sum = 0.0;
   for (final d in snap.docs) {
     final m = d.data();
 
-    // client-side filters (index ki need se bachne ke liye)
-    if (shopName != null && shopName.isNotEmpty && shopName != 'All') {
-      final sn = (m['shopName'] ?? '').toString();
-      if (sn != shopName) continue;
-    }
-    if (m['collected'] != true) continue;
+    // client-side filters
+    final okShop = (shopName == null || shopName == 'All' || shopName.isEmpty)
+        ? true
+        : (m['shopName'] ?? '') == shopName;
+    final isCollected = (m['collected'] == true);
+
+    if (!okShop || !isCollected) continue;
+
+    // aur safety ke liye 'to' window check
+    final toTs = m['to'];
+    final recTo = (toTs is Timestamp) ? toTs.toDate() : end;
+    if (recTo.isAfter(end)) continue;
 
     final v = m['cashAmount'];
     sum += (v is num) ? v.toDouble() : (double.tryParse('${v ?? ''}') ?? 0.0);
   }
   return sum;
 }
-
 
 
 Future<void> updateOtherExpenseEntry({

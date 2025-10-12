@@ -6,6 +6,7 @@ import 'add_sale_screen.dart';
 import 'transactions_screen.dart';
 import 'transaction_report_screen.dart';
 import 'orders_screen.dart';
+import 'profile_screen.dart'; // 👈 NEW
 
 class ShopActionsScreen extends StatelessWidget {
   final String shopName;
@@ -15,7 +16,7 @@ class ShopActionsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = context.watch<AppDataProvider>();
 
-    // ✅ Ab teenon roles (employee + admin + manager) Daily Sale kar sakte hain
+    // ✅ Teenon roles Daily Sale kar sakte hain
     final canPostDailySale = app.isEmployee || app.isAdmin || app.isManager;
     final isEmployee = app.isEmployee;
     final cols = MediaQuery.of(context).size.width >= 900 ? 3 : 2;
@@ -69,6 +70,16 @@ class ShopActionsScreen extends StatelessWidget {
                   MaterialPageRoute(
                     builder: (_) => TransactionReportScreen(shopName: shopName),
                   ),
+                ),
+              ),
+
+            // 👇 NEW: Employee-only Profile tile (logout option Profile screen par hai)
+            if (isEmployee)
+              _Tile(
+                label: 'Profile',
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ProfileScreen()),
                 ),
               ),
           ],

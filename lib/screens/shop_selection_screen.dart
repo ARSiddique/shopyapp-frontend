@@ -6,16 +6,20 @@ import 'shop_actions_screen.dart';
 import 'add_sale_screen.dart';
 import 'transactions_screen.dart';
 import 'login_screen.dart';
+import 'cash_collect_screen.dart';
+import 'sales_screen.dart';
 
-enum NextAction { actions, addSale, transaction }
+enum NextAction { actions, addSale, transaction, cashCollect, sales }
 
 class ShopSelectionScreen extends StatefulWidget {
   const ShopSelectionScreen({super.key, this.next = NextAction.actions});
 
   /// After selecting a shop, where to go?
-  /// - actions: open ShopActionsScreen (Daily Sale / Transaction / History hub)
-  /// - addSale: open AddSaleScreen directly
-  /// - transaction: open TransactionsScreen directly
+  /// - actions: hub
+  /// - addSale: AddSaleScreen directly
+  /// - transaction: TransactionsScreen directly
+  /// - cashCollect: CashCollectScreen with selected shop
+  /// - sales: SalesScreen with selected shop (or ALL)
   final NextAction next;
 
   @override
@@ -28,7 +32,6 @@ class _ShopSelectionScreenState extends State<ShopSelectionScreen> {
   @override
   void initState() {
     super.initState();
-    // ✅ Avoid using BuildContext across async gaps
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       final app = context.read<AppDataProvider>();
@@ -49,7 +52,6 @@ class _ShopSelectionScreenState extends State<ShopSelectionScreen> {
     final me = app.loggedInUser ?? {};
     final role = (me['role'] ?? '').toString().toLowerCase();
 
-    // all active shops
     final allActive = app.shops
         .where((s) => (s['isDeleted'] ?? false) != true)
         .map((s) => {
@@ -60,17 +62,24 @@ class _ShopSelectionScreenState extends State<ShopSelectionScreen> {
         .toList()
       ..sort((a, b) => a['name']!.compareTo(b['name']!));
 
-    // employee's assigned shops
     final assigned = (me['assignedShops'] as List? ?? [])
         .map((e) => e.toString().toLowerCase())
         .where((e) => e.isNotEmpty)
         .toSet();
 
-    // visible list
     final isEmployee = role == 'employee';
-    final visible = isEmployee
+    final visibleBase = isEmployee
         ? allActive.where((s) => assigned.contains(s['name']!.toLowerCase())).toList()
-        : allActive; // admin/manager → all shops
+        : allActive;
+
+    // Inject "All Shops" at top for Admin/Manager when navigating to Sales
+    final showAllShopsOption = !isEmployee && widget.next == NextAction.sales && visibleBase.isNotEmpty;
+    final visible = showAllShopsOption
+        ? [
+            {'id': 'ALL', 'name': 'All Shops'},
+            ...visibleBase,
+          ]
+        : visibleBase;
 
     return Scaffold(
       appBar: AppBar(
@@ -97,8 +106,10 @@ class _ShopSelectionScreenState extends State<ShopSelectionScreen> {
                         separatorBuilder: (_, __) => const SizedBox(height: 8),
                         itemBuilder: (_, i) {
                           final shop = visible[i];
+                          final isAll = shop['id'] == 'ALL';
                           return _ShopTile(
                             name: shop['name']!,
+                            leadingIcon: isAll ? Icons.all_inclusive : Icons.store,
                             onTap: () => _selectShop(shop['id']!, shop['name']!),
                           );
                         },
@@ -119,8 +130,7 @@ class _ShopSelectionScreenState extends State<ShopSelectionScreen> {
             isEmployee
                 ? 'No shop assigned to your account.'
                 : 'No active shops found.',
-            style: const TextStyle(fontWeight: FontWeight.w600),
-          ),
+            style: const TextStyle(fontWeight: FontWeight.w600)),
           const SizedBox(height: 6),
           Text(
             isEmployee
@@ -135,32 +145,34 @@ class _ShopSelectionScreenState extends State<ShopSelectionScreen> {
   }
 
   Future<void> _selectShop(String id, String name) async {
-    // ✅ pre-capture
     final app = context.read<AppDataProvider>();
     final navigator = Navigator.of(context);
 
-    // Save selection (if other parts use it)
+    // Save selection (including ALL sentinel so SalesScreen can read it if needed)
     app.setSelectedShop(id, name);
 
-    // 🔽 Decide next screen based on 'next' param
     switch (widget.next) {
       case NextAction.addSale:
-        await navigator.push(
-          MaterialPageRoute(builder: (_) => AddSaleScreen(shopName: name)),
-        );
+        await navigator.push(MaterialPageRoute(builder: (_) => AddSaleScreen(shopName: name)));
         break;
 
       case NextAction.transaction:
-        await navigator.push(
-          MaterialPageRoute(builder: (_) => TransactionsScreen(shopName: name)),
-        );
+        await navigator.push(MaterialPageRoute(builder: (_) => TransactionsScreen(shopName: name)));
+        break;
+
+      case NextAction.cashCollect:
+        await navigator.push(MaterialPageRoute(builder: (_) => CashCollectScreen(initialShopName: name)));
+        break;
+
+      case NextAction.sales:
+        // For ALL, we pass a sentinel that SalesScreen can interpret as "show all"
+        final initial = id == 'ALL' ? 'ALL' : name;
+        await navigator.push(MaterialPageRoute(builder: (_) => SalesScreen(initialShopName: initial)));
         break;
 
       case NextAction.actions:
       default:
-        await navigator.push(
-          MaterialPageRoute(builder: (_) => ShopActionsScreen(shopName: name)),
-        );
+        await navigator.push(MaterialPageRoute(builder: (_) => ShopActionsScreen(shopName: name)));
         break;
     }
   }
@@ -175,18 +187,11 @@ class _ShopSelectionScreenState extends State<ShopSelectionScreen> {
             title: const Text('Logout?'),
             content: const Text('You will be signed out and returned to the login screen.'),
             actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('Cancel'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('Logout'),
-              ),
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+              TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Logout')),
             ],
           ),
-        ) ??
-        false;
+        ) ?? false;
 
     if (!ok) return;
 
@@ -201,26 +206,31 @@ class _ShopSelectionScreenState extends State<ShopSelectionScreen> {
 
 class _ShopTile extends StatelessWidget {
   final String name;
+  final IconData leadingIcon;
   final VoidCallback onTap;
 
   const _ShopTile({
     required this.name,
+    required this.leadingIcon,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
+    final isAll = name.toLowerCase().contains('all shop');
     return Card(
       elevation: 0,
+      color: isAll ? Theme.of(context).colorScheme.surfaceContainerHighest : null,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(
-          color: Theme.of(context).dividerColor.withValues(alpha: 0.4),
-        ),
+        side: BorderSide(color: Theme.of(context).dividerColor.withValues(alpha: 0.4)),
       ),
       child: ListTile(
-        leading: const CircleAvatar(child: Icon(Icons.store)),
-        title: Text(name, style: const TextStyle(fontWeight: FontWeight.w600)),
+        leading: CircleAvatar(child: Icon(leadingIcon)),
+        title: Text(
+          name,
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
         trailing: const Icon(Icons.chevron_right),
         onTap: onTap,
       ),

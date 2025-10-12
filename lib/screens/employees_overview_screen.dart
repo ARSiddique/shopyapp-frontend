@@ -4,7 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../providers/app_data_provider.dart';
 import 'add_employee_and_access_screen.dart';
-import 'employee_expense_detail_screen.dart'; // ✅ NEW: navigate to detail
+import 'employee_expense_detail_screen.dart';
 
 class EmployeesOverviewScreen extends StatefulWidget {
   const EmployeesOverviewScreen({super.key});
@@ -15,24 +15,28 @@ class EmployeesOverviewScreen extends StatefulWidget {
 
 class _EmployeesOverviewScreenState extends State<EmployeesOverviewScreen> {
   bool _loading = false;
+  final TextEditingController _searchCtrl = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    // Load employees (and shops for assignment UI) after first frame
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       final app = context.read<AppDataProvider>();
       setState(() => _loading = true);
-      if (app.employees.isEmpty) {
-        await app.fetchEmployees();
+      try {
+        if (app.employees.isEmpty) await app.fetchEmployees();
+        if (app.shops.isEmpty) await app.fetchShops();
+      } finally {
+        if (mounted) setState(() => _loading = false);
       }
-      if (app.shops.isEmpty) {
-        await app.fetchShops();
-      }
-      if (!mounted) return;
-      setState(() => _loading = false);
     });
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
   }
 
   bool _canManage(Map<String, dynamic>? me) {
@@ -74,10 +78,8 @@ class _EmployeesOverviewScreenState extends State<EmployeesOverviewScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      'Assign shops to $name',
-                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
-                    ),
+                    Text('Assign shops to $name',
+                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
                     const SizedBox(height: 8),
                     if (allShops.isEmpty)
                       const Padding(
@@ -122,9 +124,7 @@ class _EmployeesOverviewScreenState extends State<EmployeesOverviewScreen> {
                                 userName: name,
                                 newAssignedShops: selected.toList(),
                               );
-                              if (context.mounted) {
-                                Navigator.pop(ctx);
-                              }
+                              if (context.mounted) Navigator.pop(ctx);
                             },
                             child: const Text('Save'),
                           ),
@@ -236,9 +236,7 @@ class _EmployeesOverviewScreenState extends State<EmployeesOverviewScreen> {
                             leading: const Icon(Icons.lock_outline),
                             title: const Text('Password / Login Code'),
                             subtitle: Text(
-                              storedPassword.isEmpty
-                                  ? '—'
-                                  : '•' * storedPassword.length,
+                              storedPassword.isEmpty ? '—' : '•' * storedPassword.length,
                               style: const TextStyle(letterSpacing: 1.2),
                             ),
                             trailing: storedPassword.isEmpty
@@ -253,10 +251,8 @@ class _EmployeesOverviewScreenState extends State<EmployeesOverviewScreen> {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    const Text(
-                      'Assigned shops',
-                      style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
-                    ),
+                    const Text('Assigned shops',
+                        style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
                     const SizedBox(height: 8),
                     if (shops.isEmpty)
                       const Text('No shops assigned')
@@ -265,10 +261,7 @@ class _EmployeesOverviewScreenState extends State<EmployeesOverviewScreen> {
                         spacing: 6,
                         runSpacing: 6,
                         children: shops
-                            .map((s) => Chip(
-                                  label: Text(s),
-                                  visualDensity: VisualDensity.compact,
-                                ))
+                            .map((s) => Chip(label: Text(s), visualDensity: VisualDensity.compact))
                             .toList(),
                       ),
                     const SizedBox(height: 8),
@@ -286,9 +279,7 @@ class _EmployeesOverviewScreenState extends State<EmployeesOverviewScreen> {
     if (!mounted) return;
     await Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (_) => AddEmployeeAndAccessScreen(existingEmployee: emp),
-      ),
+      MaterialPageRoute(builder: (_) => AddEmployeeAndAccessScreen(existingEmployee: emp)),
     );
   }
 
@@ -318,44 +309,25 @@ class _EmployeesOverviewScreenState extends State<EmployeesOverviewScreen> {
     }
   }
 
-  Widget _shopPreviewChips(List<String> shops) {
-    if (shops.isEmpty) return const Text('No shops assigned');
-    final visible = shops.take(2).toList();
-    final remaining = shops.length - visible.length;
-
-    return Row(
-      children: [
-        ...visible.map(
-          (s) => Padding(
-            padding: const EdgeInsets.only(right: 6),
-            child: Chip(label: Text(s), visualDensity: VisualDensity.compact),
-          ),
-        ),
-        if (remaining > 0)
-          PopupMenuButton<String>(
-            tooltip: 'More shops',
-            itemBuilder: (ctx) => shops
-                .skip(2)
-                .map((s) => PopupMenuItem<String>(value: s, child: Text(s)))
-                .toList(),
-            child: Chip(
-              label: Text('+$remaining'),
-              visualDensity: VisualDensity.compact,
-            ),
-          ),
-      ],
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final app = Provider.of<AppDataProvider>(context);
-    final me = app.loggedInUser;
-    final canManage = _canManage(me);
+    final canManage = _canManage(app.loggedInUser);
 
-    final items = app.employees
-        .where((e) => (e['role'] ?? '').toString().toLowerCase() != 'admin') // hide admin
+    // Admin ko list se hide
+    final all = app.employees
+        .where((e) => (e['role'] ?? '').toString().toLowerCase() != 'admin')
         .toList();
+
+    // Search filter
+    final q = _searchCtrl.text.trim().toLowerCase();
+    final items = q.isEmpty
+        ? all
+        : all.where((e) {
+            final name = (e['name'] ?? '').toString().toLowerCase();
+            final email = (e['email'] ?? '').toString().toLowerCase();
+            return name.contains(q) || email.contains(q);
+          }).toList();
 
     return Scaffold(
       appBar: AppBar(
@@ -373,240 +345,141 @@ class _EmployeesOverviewScreenState extends State<EmployeesOverviewScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const AddEmployeeAndAccessScreen()),
-          );
-        },
-        icon: const Icon(Icons.person_add),
-        label: const Text('Add employee'),
-      ),
+      // NOTE: Clean UX — FAB remove kiya gaya
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : LayoutBuilder(
-              builder: (context, constraints) {
-                int columns = 1;
-                if (constraints.maxWidth >= 900) {
-                  columns = 3;
-                } else if (constraints.maxWidth >= 600) {
-                  columns = 2;
-                }
-
-                if (items.isEmpty) {
-                  return const Center(child: Text('No employees found'));
-                }
-
-                if (columns == 1) {
-                  return ListView.separated(
-                    padding: const EdgeInsets.all(12),
-                    itemCount: items.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 8),
-                    itemBuilder: (_, i) => _EmpCard(
-                      emp: items[i],
-                      canManage: canManage,
-                      onAssign: (uid, name) =>
-                          _openAssignShopsSheet(context, uid: uid, name: name),
-                      onTap: () => _openEmployeeDetail(context, emp: items[i]),
-                      onEdit: () => _editEmployee(items[i]),
-                      onDelete: () {
-                        final uid = (items[i]['uid'] ?? '').toString();
-                        final name = (items[i]['name'] ?? '').toString();
-                        final role = (items[i]['role'] ?? '').toString();
-                        if (uid.isNotEmpty) {
-                          _confirmDelete(uid, name, role);
-                        }
-                      },
-                      shopPreviewBuilder: _shopPreviewChips,
+          : Column(
+              children: [
+                const SizedBox(height: 8),
+                // Search bar
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: TextField(
+                    controller: _searchCtrl,
+                    onChanged: (_) => setState(() {}),
+                    decoration: InputDecoration(
+                      hintText: 'Search employee',
+                      prefixIcon: const Icon(Icons.search),
+                      isDense: true,
+                      filled: true,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
-                  );
-                }
+                  ),
+                ),
+                const SizedBox(height: 8),
 
-                return GridView.builder(
-                  padding: const EdgeInsets.all(12),
-                  itemCount: items.length,
-                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: columns,
-                    crossAxisSpacing: 12,
-                    mainAxisSpacing: 12,
-                    childAspectRatio: 3.0,
+                if (items.isEmpty)
+                  const Expanded(
+                    child: Center(child: Text('No employees found')),
+                  )
+                else
+                  Expanded(
+                    child: ListView.separated(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      itemCount: items.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1, thickness: 0.2),
+                      itemBuilder: (_, i) {
+                        final emp = items[i];
+                        final name = (emp['name'] ?? '').toString();
+                        final role = (emp['role'] ?? '').toString();
+                        final uid = (emp['uid'] ?? '').toString();
+                        final shops = (emp['assignedShops'] as List? ?? []).cast<dynamic>()
+                            .map((e) => e.toString()).where((s) => s.isNotEmpty).toList();
+
+                        return ListTile(
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                          leading: CircleAvatar(
+                            child: Text(
+                              name.isNotEmpty ? name[0].toUpperCase() : '?',
+                              style: const TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                          title: Row(
+                            children: [
+                              Expanded(child: Text(name, overflow: TextOverflow.ellipsis)),
+                              const SizedBox(width: 8),
+                              _RoleChip(role: role),
+                            ],
+                          ),
+                          subtitle: Text(
+                            shops.isEmpty ? 'No shops assigned' : shops.join(', '),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              PopupMenuButton<String>(
+                                tooltip: 'More',
+                                onSelected: (v) async {
+                                  if (v == 'assign') {
+                                    if (uid.isNotEmpty) {
+                                      await _openAssignShopsSheet(context, uid: uid, name: name);
+                                    }
+                                  }
+                                  if (v == 'expenses') {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => EmployeeExpenseDetailScreen(
+                                          employeeName: name,
+                                          employee: emp,
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                  if (v == 'edit') {
+                                    await _editEmployee(emp);
+                                  }
+                                  if (v == 'delete') {
+                                    await _confirmDelete(uid, name, role);
+                                  }
+                                  if (v == 'view') {
+                                    _openEmployeeDetail(context, emp: emp);
+                                  }
+                                },
+                                itemBuilder: (ctx) => [
+                                  const PopupMenuItem(value: 'assign', child: Text('Assign shops')),
+                                  const PopupMenuItem(value: 'expenses', child: Text('Expenses')),
+                                  const PopupMenuItem(value: 'view', child: Text('View info')),
+                                  if (canManage) const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                                  if (canManage) const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                                ],
+                                icon: const Icon(Icons.more_vert),
+                              ),
+                              const SizedBox(width: 6),
+                              const Icon(Icons.chevron_right),
+                            ],
+                          ),
+                          onTap: () => _openEmployeeDetail(context, emp: emp),
+                        );
+                      },
+                    ),
                   ),
-                  itemBuilder: (_, i) => _EmpCard(
-                    emp: items[i],
-                    canManage: canManage,
-                    onAssign: (uid, name) =>
-                        _openAssignShopsSheet(context, uid: uid, name: name),
-                    onTap: () => _openEmployeeDetail(context, emp: items[i]),
-                    onEdit: () => _editEmployee(items[i]),
-                    onDelete: () {
-                      final uid = (items[i]['uid'] ?? '').toString();
-                      final name = (items[i]['name'] ?? '').toString();
-                      final role = (items[i]['role'] ?? '').toString();
-                      if (uid.isNotEmpty) {
-                        _confirmDelete(uid, name, role);
-                      }
-                    },
-                    shopPreviewBuilder: _shopPreviewChips,
-                  ),
-                );
-              },
+              ],
             ),
     );
   }
 }
 
-class _EmpCard extends StatelessWidget {
-  final Map<String, dynamic> emp;
-  final bool canManage;
-  final void Function(String uid, String name) onAssign;
-  final VoidCallback onTap;
-  final VoidCallback onEdit;
-  final VoidCallback onDelete;
-  final Widget Function(List<String>) shopPreviewBuilder;
-
-  const _EmpCard({
-    required this.emp,
-    required this.canManage,
-    required this.onAssign,
-    required this.onTap,
-    required this.onEdit,
-    required this.onDelete,
-    required this.shopPreviewBuilder,
-  });
+class _RoleChip extends StatelessWidget {
+  const _RoleChip({required this.role});
+  final String role;
 
   @override
   Widget build(BuildContext context) {
-    final name = (emp['name'] ?? '').toString();
-    final role = (emp['role'] ?? '').toString().toLowerCase();
-    final uid = (emp['uid'] ?? '').toString();
-    final shops = (emp['assignedShops'] as List? ?? [])
-        .map((e) => e.toString())
-        .where((e) => e.isNotEmpty)
-        .toList();
-
-    final isAdmin = role == 'admin';
-
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(
-          color: Theme.of(context).dividerColor.withValues(alpha: 0.4),
-        ),
+    final r = (role.isEmpty ? 'employee' : role).toLowerCase();
+    final Color color =
+        r == 'admin' ? Colors.indigo : (r == 'manager' ? Colors.orange : Colors.green);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: ShapeDecoration(
+        color: color.withValues(alpha: 0.12),
+        shape: StadiumBorder(side: BorderSide(color: Theme.of(context).dividerColor.withOpacity(0.2))),
       ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: onTap, // tap card -> quick info sheet
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              const CircleAvatar(child: Icon(Icons.person)),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // name + role + menu
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            name.isEmpty ? 'Unnamed' : name,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 16,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: isAdmin
-                                ? Colors.indigo.withValues(alpha: 0.12)
-                                : role == 'manager'
-                                    ? Colors.orange.withValues(alpha: 0.12)
-                                    : Colors.green.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: Text(
-                            role,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: isAdmin
-                                  ? Colors.indigo
-                                  : role == 'manager'
-                                      ? Colors.orange
-                                      : Colors.green,
-                            ),
-                          ),
-                        ),
-                        if (canManage)
-                          PopupMenuButton<String>(
-                            onSelected: (value) {
-                              if (value == 'view') {
-                                onTap();
-                              } else if (value == 'edit') {
-                                onEdit();
-                              } else if (value == 'assign') {
-                                if (uid.isNotEmpty) onAssign(uid, name);
-                              } else if (value == 'delete') {
-                                onDelete();
-                              }
-                            },
-                            itemBuilder: (ctx) => const [
-                              PopupMenuItem(value: 'view', child: Text('View info')),
-                              PopupMenuItem(value: 'edit', child: Text('Edit')),
-                              PopupMenuItem(value: 'assign', child: Text('Assign shops')),
-                              PopupMenuItem(value: 'delete', child: Text('Delete')),
-                            ],
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    shopPreviewBuilder(shops),
-
-                    const SizedBox(height: 10),
-
-                    // ✅ Buttons row: Expenses + (optional) Assign
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 6,
-                      children: [
-                        OutlinedButton.icon(
-                          icon: const Icon(Icons.payments_outlined, size: 18),
-                          label: const Text('Expenses'),
-                          onPressed: () {
-                            if (name.isEmpty) return;
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => EmployeeExpenseDetailScreen(
-                                  employeeName: name,
-                                  employee: emp, // pass full object (for salary, etc.)
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                        if (canManage)
-                          OutlinedButton.icon(
-                            icon: const Icon(Icons.storefront_outlined, size: 18),
-                            label: const Text('Assign shops'),
-                            onPressed: uid.isEmpty ? null : () => onAssign(uid, name),
-                          ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
+      child: Text(r, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
     );
   }
 }

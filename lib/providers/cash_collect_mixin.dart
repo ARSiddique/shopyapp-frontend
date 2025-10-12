@@ -1,17 +1,14 @@
+// lib/providers/cash_collect_mixin.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 mixin CashCollectMixin {
   final FirebaseFirestore _ccDb = FirebaseFirestore.instance;
 
-  /// Optional in-memory cache (fast UI, fewer reads)
   final Map<String, bool> _ccCache = {};
 
-  // ----------------- Date helpers -----------------
   String _ccYmd(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}${d.month.toString().padLeft(2, '0')}${d.day.toString().padLeft(2, '0')}';
-
   String _ccRangeKey(DateTime from, DateTime to) => '${_ccYmd(from)}__${_ccYmd(to)}';
-
   String _ccDocId(String shopId, DateTime from, DateTime to) =>
       '${shopId.trim()}__${_ccRangeKey(from, to)}';
 
@@ -36,17 +33,11 @@ mixin CashCollectMixin {
     return !dd.isBefore(df) && !dd.isAfter(dt);
   }
 
-  /// Call once (e.g. in your provider constructor) if you haven’t already enabled persistence.
   void configureCashCollectPersistence() {
     _ccDb.settings = const Settings(persistenceEnabled: true);
   }
 
-  // ----------------- API exposed to UI -----------------
-
-  /// Sum cash for a shop in [from..to] using your in-memory `sales` list.
-  /// NOTE: This mixin expects the host class to expose a `List<Map<String,dynamic>> get sales`.
   double computeCashForShop(String shopId, DateTime from, DateTime to) {
-    // `sales` must be provided by the parent (AppDataProvider). We access it via `this`.
     final self = this as dynamic;
     final List<Map<String, dynamic>> allSales =
         (self.sales as List<Map<String, dynamic>>?) ?? const [];
@@ -66,36 +57,22 @@ mixin CashCollectMixin {
 
       num n = 0;
       final pm = (s['paymentMethod'] ?? '').toString().toLowerCase();
-      final candidates = [
-        s['cash'],
-        s['cashAmount'],
-        s['totalCash'],
-        s['cash_total']
-      ];
+      final candidates = [s['cash'], s['cashAmount'], s['totalCash'], s['cash_total']];
 
       for (final c in candidates) {
-        if (c is num) {
-          n = c;
-          break;
-        }
+        if (c is num) { n = c; break; }
         final str = c?.toString();
-        if (str != null) {
-          final parsed = num.tryParse(str);
-          if (parsed != null) {
-            n = parsed;
-            break;
-          }
-        }
+        final parsed = str == null ? null : num.tryParse(str);
+        if (parsed != null) { n = parsed; break; }
       }
 
       if (n == 0 && pm == 'cash') {
         final total = s['total'] ?? s['grandTotal'] ?? s['amount'];
-        if (total is num) {
-          n = total;
-        } else {
+        if (total is num) n = total;
+        else {
           final tStr = total?.toString();
           final parsed = tStr == null ? null : num.tryParse(tStr);
-          if (parsed != null) n = parsed;
+          if (parsed != null) n = parsed!;
         }
       }
 
@@ -105,23 +82,19 @@ mixin CashCollectMixin {
     return sum;
   }
 
-  /// Read collected flag for a shop-period (fast, no composite index needed).
   Future<bool> isCashCollected({
     required String shopId,
     required DateTime from,
     required DateTime to,
   }) async {
     final id = _ccDocId(shopId, from, to);
-
     if (_ccCache.containsKey(id)) return _ccCache[id]!;
-
     final doc = await _ccDb.collection('cash_collect').doc(id).get();
     final ok = doc.exists && (doc.data()?['collected'] == true);
     _ccCache[id] = ok;
     return ok;
   }
 
-  /// Set/unset collected flag and persist.
   Future<void> setCashCollected({
     required String shopId,
     String? shopName,
@@ -133,7 +106,6 @@ mixin CashCollectMixin {
     String? byUserName,
   }) async {
     final id = _ccDocId(shopId, from, to);
-
     final payload = <String, Object?>{
       'shopId': shopId.trim(),
       if (shopName != null) 'shopName': shopName,
@@ -150,21 +122,13 @@ mixin CashCollectMixin {
       if (byUserName != null) 'byUserName': byUserName,
     };
 
-    await _ccDb
-        .collection('cash_collect')
-        .doc(id)
-        .set(payload, SetOptions(merge: true));
-
+    await _ccDb.collection('cash_collect').doc(id).set(payload, SetOptions(merge: true));
     _ccCache[id] = collected;
 
-    // The mixin can't call notifyListeners() directly; we ask the host if it has it.
     final self = this as dynamic;
-    try {
-      self.notifyListeners();
-    } catch (_) {}
+    try { self.notifyListeners(); } catch (_) {}
   }
 
-  /// One-call helper for your row rendering (optional).
   Future<Map<String, dynamic>> getCashCollectRow({
     required String shopId,
     String? shopName,

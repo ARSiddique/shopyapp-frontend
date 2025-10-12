@@ -1,6 +1,5 @@
 // lib/screens/cash_collect_screen.dart
 import 'dart:io';
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
@@ -9,6 +8,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:pdf/pdf.dart';
 import 'package:printing/printing.dart';
 import 'package:csv/csv.dart';
+import 'package:cloud_firestore/cloud_firestore.dart'; // only for optional bulk fallback (not required)
 
 import '../providers/app_data_provider.dart';
 
@@ -18,7 +18,8 @@ const _mutedStroke = Color(0x22FFFFFF);
 const _mutedFill = Color(0x12FFFFFF);
 
 class CashCollectScreen extends StatefulWidget {
-  const CashCollectScreen({super.key});
+  const CashCollectScreen({super.key, this.initialShopName});
+  final String? initialShopName;
 
   @override
   State<CashCollectScreen> createState() => _CashCollectScreenState();
@@ -30,6 +31,7 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
   String _shopFilter = 'All';
   _Period _period = _Period.daily;
   DateTime _anchor = DateTime.now();
+  DateTimeRange? _range;
 
   List<_RowVM> _rows = const [];
   AppDataProvider? _appSub;
@@ -37,16 +39,21 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
   static const double _kHeaderHeight = 34;
   static const double _kGapBelowHeader = 4;
 
+  bool _loading = false; // top progress bar
+  bool _navBusy = false; // debounce arrows
+
   @override
   void initState() {
     super.initState();
+    final init = (widget.initialShopName ?? '').trim();
+    if (init.isNotEmpty) _shopFilter = init;
+
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       final app = context.read<AppDataProvider>();
-      // ensure sales loaded for computeCashForShop()
-      if ((app.sales as List?)?.isEmpty ?? true) {
-        await app.fetchSales();
-      }
+      if ((app.shops as List?)?.isEmpty ?? true) await app.fetchShops();
+      if ((app.sales as List?)?.isEmpty ?? true) await app.fetchSales();
+
       _appSub = app..addListener(_rebuild);
       _rebuild();
     });
@@ -68,14 +75,132 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
     }
   }
 
+Future<void> _setCollected(_RowVM row, bool collected) async {
+  final app = context.read<AppDataProvider>();
+  final user = app.loggedInUser ?? {};
+
+  await app.setCashCollected(
+    shopId: row.shopId,
+    shopName: row.shopName,
+    from: row.day,
+    to: row.day,
+    collected: collected,
+    cashAmount: row.cash.toDouble(),
+    byUserId: (user['uid'] ?? '').toString(),
+    byUserName: (user['name'] ?? user['email'] ?? '').toString(),
+  );
+
+  setState(() => row.collected = collected);
+
+  // optional: rows + totals fresh karne ke liye
+  await _rebuild();
+}
+
   Future<void> _rebuild() async {
     final app = context.read<AppDataProvider>();
-    final rows = await _buildRows(app);
+    setState(() => _loading = true);
+    final rows = await _buildRowsFast(app);
     if (!mounted) return;
-    setState(() => _rows = rows);
+    setState(() {
+      _rows = rows;
+      _loading = false;
+    });
   }
 
-  // ===== NEW: Totals (Total / Picked / Not Picked) =====
+  // ================== FAST ROW BUILDER ==================
+  /// Heavy-speedup:
+  ///  - Pre-index sales in a map: key = shopName|yyyy-mm-dd → (hasSale, cashSum)
+  ///  - Only call isCashCollected() for rows where hasSale||cash>0
+  ///  - Batch those calls in chunks of 25 (parallel)
+  Future<List<_RowVM>> _buildRowsFast(AppDataProvider app) async {
+    final allShopNames = (app.shops as List? ?? const [])
+        .where((e) => (e['isDeleted'] ?? false) != true)
+        .map((e) => (e['name'] ?? '').toString())
+        .where((e) => e.isNotEmpty)
+        .toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
+    final shops = _shopFilter == 'All'
+        ? allShopNames
+        : allShopNames.where((s) => s.toLowerCase() == _shopFilter.toLowerCase()).toList();
+
+    final (DateTime from, DateTime to) = _periodBounds();
+    final days = <DateTime>[];
+    for (DateTime d = from; !d.isAfter(to); d = DateTime(d.year, d.month, d.day).add(const Duration(days: 1))) {
+      days.add(DateTime(d.year, d.month, d.day));
+    }
+
+    // --- index sales quickly ---
+    final saleIndex = <String, _SaleAgg>{};
+    String k(String shop, DateTime d) =>
+        '${shop.toLowerCase()}|${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+    // Only scan needed window to avoid full scan for yearly
+    for (final s in (app.sales as List? ?? const [])) {
+      final shop = (s['shop'] ?? s['shopName'] ?? '').toString().trim();
+      if (shop.isEmpty) continue;
+      if (_shopFilter != 'All' && shop.toLowerCase() != _shopFilter.toLowerCase()) continue;
+
+      // saleDate stored as yyyy-MM-dd
+      final sd = (s['saleDate'] ?? '').toString();
+      if (sd.length < 10) continue;
+      final y = int.tryParse(sd.substring(0, 4));
+      final m = int.tryParse(sd.substring(5, 7));
+      final d = int.tryParse(sd.substring(8, 10));
+      if (y == null || m == null || d == null) continue;
+      final day = DateTime(y, m, d);
+      if (day.isBefore(from) || day.isAfter(to)) continue;
+
+      final key = k(shop, day);
+      final agg = saleIndex.putIfAbsent(key, () => _SaleAgg());
+      double _num(v) => v is num ? v.toDouble() : double.tryParse('$v') ?? 0.0;
+      agg.cash += _num(s['cash']);
+      agg.card += _num(s['card']);
+      agg.other += _num(s['other']);
+      agg.total += _num(s['total'] ?? 0);
+      agg.hasSale = true;
+    }
+
+    // --- build base rows (no collected yet) ---
+    final rows = <_RowVM>[];
+    for (final day in days.reversed) {
+      for (final shop in shops) {
+        final key = k(shop, day);
+        final agg = saleIndex[key];
+        final hasSale = agg?.hasSale ?? false;
+        final cash = agg?.cash ?? 0;
+
+        rows.add(_RowVM(
+          shopId: app.shopIdForName(shop) ?? '',
+          shopName: shop,
+          day: day,
+          cash: cash,
+          hasSale: hasSale,
+          collected: false, // set later (only for relevant rows)
+        ));
+      }
+    }
+
+    // --- resolve collected only where needed ---
+    final relevant = rows.where((r) => r.hasSale || r.cash > 0).toList();
+    const chunk = 25;
+    for (int i = 0; i < relevant.length; i += chunk) {
+      final part = relevant.sublist(i, (i + chunk).clamp(0, relevant.length));
+      // run in parallel (25 at a time)
+      await Future.wait(part.map((r) async {
+        try {
+          final ok = await app.isCashCollected(shopId: r.shopId, from: r.day, to: r.day);
+          r.collected = ok;
+        } catch (_) {
+          // keep false on error
+        }
+      }));
+    }
+
+    return rows;
+  }
+
+  // ================== TOTALS ==================
   ({double total, double picked, double notPicked}) _rollup() {
     double total = 0, picked = 0, notPicked = 0;
     for (final r in _rows) {
@@ -128,7 +253,7 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
     );
   }
 
-  // ---- Exports ----
+  // ================== EXPORTS ==================
   Future<void> _exportCSV() async {
     if (_rows.isEmpty) return;
     final data = <List<dynamic>>[
@@ -184,6 +309,7 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
     await Printing.layoutPdf(onLayout: (format) async => doc.save());
   }
 
+  // ================== UI ==================
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppDataProvider>();
@@ -220,236 +346,363 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
           IconButton(
             tooltip: 'Refresh',
             icon: const Icon(Icons.refresh),
-            onPressed: _rebuild,
+            onPressed: _loading ? null : _rebuild,
           ),
         ],
       ),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
-          child: Column(
-            children: [
-              _FilterDropdown(
-                label: 'Shop',
-                value: _shopFilter,
-                items: ['All', ...shops],
-                onChanged: (v) {
-                  setState(() => _shopFilter = v ?? 'All');
-                  _rebuild();
-                },
-              ),
-              const SizedBox(height: 6),
-              _FilterDropdown(
-                label: 'Period',
-                value: _period.nameLabel,
-                items: _Period.values.map((e) => e.nameLabel).toList(),
-                onChanged: (v) {
-                  final p = _PeriodUi.fromLabel(v ?? _Period.daily.nameLabel);
-                  setState(() => _period = p);
-                  _rebuild();
-                },
-              ),
-              const SizedBox(height: 6),
-              _PeriodBadge(
-                icon: Icons.event,
-                text: 'Period: $periodLabel',
-                onTap: () async {
-                  final picked = await showDatePicker(
-                    context: context,
-                    firstDate: DateTime(2022),
-                    lastDate: DateTime.now(),
-                    initialDate: _anchor,
-                  );
-                  if (!mounted) return;
-                  if (picked != null) {
-                    setState(() => _anchor = picked);
-                    _rebuild();
-                  }
-                },
-              ),
-
-              const SizedBox(height: 8),
-              // ===== NEW: Totals Bar =====
-              _totalsBar(),
-              const SizedBox(height: 8),
-
-              // Table
-              Expanded(
-                child: Column(
-                  children: [
-                    SizedBox(height: _kHeaderHeight, child: _HeaderRow()),
-                    const SizedBox(height: _kGapBelowHeader),
-                    Expanded(
-                      child: _rows.isEmpty
-                          ? Center(
-                              child: Text(
-                                'No rows for selected period.',
-                                style: TextStyle(color: Colors.white.withOpacity(0.75)),
-                              ),
-                            )
-                          : ListView.separated(
-                              itemCount: _rows.length,
-                              separatorBuilder: (_, __) => const SizedBox(height: 4),
-                              itemBuilder: (ctx, i) {
-                                final r = _rows[i];
-                                return _DataRow(
-                                  data: r,
-                                  onCollect: r.collected
-                                      ? null
-                                      : () async {
-                                          await _setCollected(r, true);
-                                          if (!mounted) return;
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            SnackBar(
-                                              content: const Text('Marked Collected'),
-                                              action: SnackBarAction(
-                                                label: 'UNDO',
-                                                onPressed: () => _setCollected(r, false),
-                                              ),
-                                            ),
-                                          );
-                                        },
-                                );
+        child: Stack(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+              child: Column(
+                children: [
+                  // ===== Filters with stable alignment =====
+                  LayoutBuilder(builder: (ctx, cs) {
+                    final wide = cs.maxWidth >= 680;
+                    if (wide) {
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SizedBox(
+                            width: 220,
+                            child: _FilterDropdown(
+                              label: 'Shop',
+                              value: _shopFilter,
+                              items: ['All', ...shops],
+                              onChanged: (v) {
+                                setState(() => _shopFilter = v ?? 'All');
+                                _rebuild();
                               },
                             ),
+                          ),
+                          const SizedBox(width: 12),
+                          SizedBox(
+                            width: 220,
+                            child: _FilterDropdown(
+                              label: 'Period',
+                              value: _period.nameLabel,
+                              items: _Period.values.map((e) => e.nameLabel).toList(),
+                              onChanged: (v) async {
+                                final p = _PeriodUi.fromLabel(v ?? _Period.daily.nameLabel);
+                                setState(() {
+                                  _period = p;
+                                  // back to today when Daily
+                                  if (_period == _Period.daily) {
+                                    final n = DateTime.now();
+                                    _anchor = DateTime(n.year, n.month, n.day);
+                                  }
+                                  if (_period == _Period.monthly) {
+                                    final n = DateTime.now();
+                                    _anchor = DateTime(n.year, n.month, 1);
+                                  } else if (_period == _Period.yearly) {
+                                    final n = DateTime.now();
+                                    _anchor = DateTime(n.year, 1, 1);
+                                  }
+                                  if (_period != _Period.range) _range = null;
+                                });
+                                if (!mounted) return;
+                                if (_period == _Period.specific) {
+                                  await _pickAnchorDate();
+                                } else if (_period == _Period.range) {
+                                  await _pickRange();
+                                }
+                                _rebuild();
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Align(
+                              alignment: Alignment.bottomLeft,
+                              child: _PeriodControls(
+                                text: 'Period: $periodLabel',
+                                isRange: _period == _Period.range,
+                                loading: _loading,
+                                onPrev: _navBusy ? null : () => _shift(-1),
+                                onNext: _navBusy ? null : () => _shift(1),
+                                onTapLabel: () async {
+                                  if (_period == _Period.range) {
+                                    await _pickRange();
+                                  } else {
+                                    await _pickAnchorDate();
+                                  }
+                                  if (!mounted) return;
+                                  _rebuild();
+                                },
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    }
+                    // narrow -> stacked nicely
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _FilterDropdown(
+                          label: 'Shop',
+                          value: _shopFilter,
+                          items: ['All', ...shops],
+                          onChanged: (v) {
+                            setState(() => _shopFilter = v ?? 'All');
+                            _rebuild();
+                          },
+                        ),
+                        const SizedBox(height: 8),
+                        _FilterDropdown(
+                          label: 'Period',
+                          value: _period.nameLabel,
+                          items: _Period.values.map((e) => e.nameLabel).toList(),
+                          onChanged: (v) async {
+                            final p = _PeriodUi.fromLabel(v ?? _Period.daily.nameLabel);
+                            setState(() {
+                              _period = p;
+                              if (_period == _Period.daily) {
+                                final n = DateTime.now();
+                                _anchor = DateTime(n.year, n.month, n.day);
+                              }
+                              if (_period == _Period.monthly) {
+                                final n = DateTime.now();
+                                _anchor = DateTime(n.year, n.month, 1);
+                              } else if (_period == _Period.yearly) {
+                                final n = DateTime.now();
+                                _anchor = DateTime(n.year, 1, 1);
+                              }
+                              if (_period != _Period.range) _range = null;
+                            });
+                            if (!mounted) return;
+                            if (_period == _Period.specific) {
+                              await _pickAnchorDate();
+                            } else if (_period == _Period.range) {
+                              await _pickRange();
+                            }
+                            _rebuild();
+                          },
+                        ),
+                        const SizedBox(height: 8),
+                        _PeriodControls(
+                          text: 'Period: $periodLabel',
+                          isRange: _period == _Period.range,
+                          loading: _loading,
+                          onPrev: _navBusy ? null : () => _shift(-1),
+                          onNext: _navBusy ? null : () => _shift(1),
+                          onTapLabel: () async {
+                            if (_period == _Period.range) {
+                              await _pickRange();
+                            } else {
+                              await _pickAnchorDate();
+                            }
+                            if (!mounted) return;
+                            _rebuild();
+                          },
+                        ),
+                      ],
+                    );
+                  }),
+
+                  const SizedBox(height: 8),
+                  _totalsBar(),
+                  const SizedBox(height: 8),
+
+                  Expanded(
+                    child: Column(
+                      children: [
+                        SizedBox(height: _kHeaderHeight, child: _HeaderRow()),
+                        const SizedBox(height: _kGapBelowHeader),
+                        Expanded(
+                          child: _rows.isEmpty && !_loading
+                              ? Center(
+                                  child: Text(
+                                    'No rows for selected period.',
+                                    style: TextStyle(color: Colors.white.withOpacity(0.75)),
+                                  ),
+                                )
+                              : Scrollbar(
+                                  child: ListView.separated(
+                                    itemCount: _rows.length,
+                                    separatorBuilder: (_, __) => const SizedBox(height: 4),
+                                    itemBuilder: (ctx, i) {
+                                      final r = _rows[i];
+                                      return _DataRow(
+                                        data: r,
+                                        onCollect: r.collected || _loading
+                                            ? null
+                                            : () async {
+                                                await _setCollected(r, true);
+                                                if (!mounted) return;
+                                                ScaffoldMessenger.of(context).showSnackBar(
+                                                  SnackBar(
+                                                    content: const Text('Marked Collected'),
+                                                    action: SnackBarAction(
+                                                      label: 'UNDO',
+                                                      onPressed: () => _setCollected(r, false),
+                                                    ),
+                                                  ),
+                                                );
+                                              },
+                                      );
+                                    },
+                                  ),
+                                ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+
+            if (_loading)
+              const Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: LinearProgressIndicator(minHeight: 2),
+              ),
+          ],
         ),
       ),
     );
   }
 
-  Future<List<_RowVM>> _buildRows(AppDataProvider app) async {
-    final allShopNames = (app.shops as List? ?? const [])
-        .where((e) => (e['isDeleted'] ?? false) != true)
-        .map((e) => (e['name'] ?? '').toString())
-        .where((e) => e.isNotEmpty)
-        .toList()
-      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-
-    final List<String> shopNames = _shopFilter == 'All'
-        ? allShopNames
-        : allShopNames.where((s) => s.toLowerCase() == _shopFilter.toLowerCase()).toList();
-
-    final (DateTime from, DateTime to) = _periodBounds();
-    final days = <DateTime>[];
-    for (DateTime d = from;
-        !d.isAfter(to);
-        d = DateTime(d.year, d.month, d.day).add(const Duration(days: 1))) {
-      days.add(DateTime(d.year, d.month, d.day));
-    }
-
-    final rows = <_RowVM>[];
-
-    for (final day in days.reversed) {
-      final dayStart = DateTime(day.year, day.month, day.day);
-      final dayEnd = dayStart;
-
-      final items = await Future.wait(shopNames.map((_shopName) async {
-        final shopId = app.shopIdForName(_shopName) ?? '';
-        if (shopId.isEmpty) return null;
-
-        final cash = app.computeCashForShop(shopId, dayStart, dayEnd);
-
-        final hasSale = app.sales.any((s) {
-          final sid = (s['shopId'] ?? s['shop'] ?? '').toString().trim();
-          if (sid != shopId) return false;
-          final saleDateStr = (s['saleDate'] ?? '').toString();
-          if (saleDateStr.length < 10) return false;
-          try {
-            final p = saleDateStr.split('-');
-            final sd = DateTime(int.parse(p[0]), int.parse(p[1]), int.parse(p[2]));
-            return sd.year == dayStart.year && sd.month == dayStart.month && sd.day == dayStart.day;
-          } catch (_) {
-            return false;
-          }
-        });
-
-        bool collected = false;
-        try {
-          collected = await app.isCashCollected(shopId: shopId, from: dayStart, to: dayEnd);
-        } catch (_) {}
-
-        return _RowVM(
-          shopId: shopId,
-          shopName: _shopName,
-          day: dayStart,
-          cash: cash,
-          hasSale: hasSale,
-          collected: collected,
-        );
-      }));
-
-      rows.addAll(items.whereType<_RowVM>());
-    }
-
-    rows.sort((a, b) {
-      final c = b.day.compareTo(a.day);
-      if (c != 0) return c;
-      return a.shopName.compareTo(b.shopName);
-    });
-
-    return rows;
-  }
-
-  Future<void> _setCollected(_RowVM row, bool collected) async {
-    final app = context.read<AppDataProvider>();
-    final user = app.loggedInUser ?? {};
-    await app.setCashCollected(
-      shopId: row.shopId,
-      shopName: row.shopName,
-      from: row.day,
-      to: row.day,
-      collected: collected,
-      cashAmount: row.cash.toDouble(),
-      byUserId: (user['uid'] ?? '').toString(),
-      byUserName: (user['name'] ?? user['email'] ?? '').toString(),
+  // ---- Pickers ----
+  Future<void> _pickAnchorDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _anchor,
+      firstDate: DateTime(2022, 1, 1),
+      lastDate: DateTime(now.year, now.month, now.day),
     );
-
-    setState(() => row.collected = collected);
+    if (picked != null) setState(() => _anchor = picked);
   }
 
+  Future<void> _pickRange() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      initialDateRange: _range ??
+          DateTimeRange(
+            start: DateTime(now.year, now.month, now.day).subtract(const Duration(days: 6)),
+            end: DateTime(now.year, now.month, now.day),
+          ),
+      firstDate: DateTime(2022, 1, 1),
+      lastDate: DateTime(now.year, now.month, now.day),
+    );
+    if (picked != null) setState(() => _range = picked);
+  }
+
+  // ---- Arrows (prev/next) ----
+  Future<void> _shift(int dir) async {
+    if (_navBusy) return;
+    setState(() => _navBusy = true);
+
+    switch (_period) {
+      case _Period.daily:
+      case _Period.specific:
+        _anchor = _anchor.add(Duration(days: dir));
+        break;
+      case _Period.weekly:
+        _anchor = _anchor.add(Duration(days: 7 * dir));
+        break;
+      case _Period.monthly:
+        _anchor = DateTime(_anchor.year, _anchor.month + dir, 1);
+        break;
+      case _Period.yearly:
+        _anchor = DateTime(_anchor.year + dir, 1, 1);
+        break;
+      case _Period.range:
+        if (_range != null) {
+          final len = _range!.end.difference(_range!.start).inDays + 1;
+          final s = _range!.start.add(Duration(days: len * dir));
+          final e = _range!.end.add(Duration(days: len * dir));
+          final today = DateTime.now();
+          final cap = DateTime(today.year, today.month, today.day);
+          final newEnd = e.isAfter(cap) ? cap : e;
+          final delta = e.difference(newEnd).inDays;
+          final newStart = s.subtract(Duration(days: delta));
+          _range = DateTimeRange(start: newStart, end: newEnd);
+        }
+        break;
+    }
+
+    final today = DateTime.now();
+    final t = DateTime(today.year, today.month, today.day);
+    if (_anchor.isAfter(t)) _anchor = t;
+
+    await _rebuild();
+    if (!mounted) return;
+    setState(() => _navBusy = false);
+  }
+
+  // ===== Bounds from anchor/range =====
   (DateTime, DateTime) _periodBounds() {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
 
+    if (_period == _Period.range && _range != null) {
+      final s = DateTime(_range!.start.year, _range!.start.month, _range!.start.day);
+      var e = DateTime(_range!.end.year, _range!.end.month, _range!.end.day);
+      if (e.isAfter(today)) e = today;
+      return (s, e);
+    }
+
     switch (_period) {
       case _Period.daily:
+      case _Period.specific: {
         final d = DateTime(_anchor.year, _anchor.month, _anchor.day);
         final capped = d.isAfter(today) ? today : d;
         return (capped, capped);
-      case _Period.weekly:
-        final start = today.subtract(const Duration(days: 6));
-        return (start, today);
-      case _Period.monthly:
-        final start = today.subtract(const Duration(days: 30));
-        return (start, today);
-      case _Period.yearly:
-        final start = today.subtract(const Duration(days: 365));
-        return (start, today);
-      case _Period.specific:
-        final d = DateTime(_anchor.year, _anchor.month, _anchor.day);
-        final capped = d.isAfter(today) ? today : d;
-        return (capped, capped);
+      }
+      case _Period.weekly: {
+        final end = _capToToday(_anchor, today);
+        final start = end.subtract(const Duration(days: 6));
+        return (start, end);
+      }
+      case _Period.monthly: {
+        final a = _capToToday(_anchor, today);
+        final first = DateTime(a.year, a.month, 1);
+        final lastOfMonth = DateTime(a.year, a.month + 1, 0);
+        final end = lastOfMonth.isAfter(today) ? today : lastOfMonth;
+        return (first, end);
+      }
+      case _Period.yearly: {
+        final a = _capToToday(_anchor, today);
+        final first = DateTime(a.year, 1, 1);
+        final last = DateTime(a.year, 12, 31);
+        final end = last.isAfter(today) ? today : last;
+        return (first, end);
+      }
       case _Period.range:
-        final s = DateTime(_anchor.year, _anchor.month, _anchor.day).subtract(const Duration(days: 3));
-        var e = DateTime(_anchor.year, _anchor.month, _anchor.day).add(const Duration(days: 3));
-        if (e.isAfter(today)) e = today;
-        return (s.isAfter(e) ? e : s, e);
+        final d = DateTime(_anchor.year, _anchor.month, _anchor.day);
+        return (d, d);
     }
   }
 
+  DateTime _capToToday(DateTime d, DateTime today) {
+    final dd = DateTime(d.year, d.month, d.day);
+    return dd.isAfter(today) ? today : dd;
+  }
+
   String _periodLabel() {
+    if (_period == _Period.range && _range != null) {
+      final s = _df.format(DateTime(_range!.start.year, _range!.start.month, _range!.start.day));
+      final e = _df.format(DateTime(_range!.end.year, _range!.end.month, _range!.end.day));
+      return '$s — $e';
+    }
     final (from, to) = _periodBounds();
     if (_Period.daily == _period || _Period.specific == _period) {
       return _df.format(from);
     }
     return '${_df.format(from)} — ${_df.format(to)}';
   }
+}
+
+// ========= helpers / models =========
+class _SaleAgg {
+  bool hasSale = false;
+  double cash = 0, card = 0, other = 0, total = 0;
 }
 
 enum _Period { daily, weekly, monthly, yearly, specific, range }
@@ -679,40 +932,87 @@ class _FilterDropdown extends StatelessWidget {
   }
 }
 
-class _PeriodBadge extends StatelessWidget {
-  final IconData icon;
+class _PeriodControls extends StatelessWidget {
   final String text;
-  final VoidCallback? onTap;
-  const _PeriodBadge({required this.icon, required this.text, this.onTap});
+  final bool isRange;
+  final bool loading;
+  final VoidCallback? onPrev;
+  final VoidCallback? onNext;
+  final VoidCallback? onTapLabel;
+
+  const _PeriodControls({
+    required this.text,
+    required this.isRange,
+    required this.loading,
+    this.onPrev,
+    this.onNext,
+    this.onTapLabel,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(8),
-      onTap: onTap,
-      child: Ink(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-        decoration: BoxDecoration(
-          color: _mutedFill,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: _mutedStroke),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, color: Colors.tealAccent.shade400, size: 18),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Text(
-                text,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.w700),
+    final icon = isRange ? Icons.date_range : Icons.event;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+      decoration: BoxDecoration(
+        color: _mutedFill,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _mutedStroke),
+      ),
+      child:Row(
+  // center badge ko bachi hui width deni hai, isliye max rakho
+  mainAxisSize: MainAxisSize.max,
+  children: [
+    IconButton(
+      tooltip: 'Previous',
+      icon: const Icon(Icons.chevron_left),
+      onPressed: loading ? null : onPrev,
+      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+      visualDensity: VisualDensity.compact,
+      padding: EdgeInsets.zero,
+    ),
+
+    // ⬇️ CENTER BADGE gets the remaining width
+    Expanded(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(6),
+        onTap: loading ? null : onTapLabel,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.max,
+            children: [
+              Icon(icon, color: Colors.tealAccent.shade400, size: 18),
+              const SizedBox(width: 6),
+
+              // ⬇️ text shrink with ellipsis (no overflow)
+              Flexible(
+                child: Text(
+                  text,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
               ),
-            ),
-            const SizedBox(width: 4),
-            const Icon(Icons.edit_calendar_outlined, size: 16, color: Colors.white70),
-          ],
+
+              const SizedBox(width: 6),
+              const Icon(Icons.edit_calendar_outlined, size: 16, color: Colors.white70),
+            ],
+          ),
         ),
       ),
+    ),
+
+    IconButton(
+      tooltip: 'Next',
+      icon: const Icon(Icons.chevron_right),
+      onPressed: loading ? null : onNext,
+      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+      visualDensity: VisualDensity.compact,
+      padding: EdgeInsets.zero,
+    ),
+  ],
+)
     );
   }
 }

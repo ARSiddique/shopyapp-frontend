@@ -9,7 +9,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../providers/app_data_provider.dart';
 import '../screens/add_sale_screen.dart';
 import '../screens/orders_screen.dart';
-import '../screens/sales_screen.dart';
+// import '../screens/sales_screen.dart';
 import '../screens/profile_screen.dart';
 import '../screens/login_screen.dart';
 import '../screens/all_shops_screen.dart';
@@ -17,8 +17,9 @@ import '../screens/employees_overview_screen.dart';
 // import '../screens/all_shops_summary_screen.dart';
 import 'all_shops_hub_screen.dart';
 import '../screens/wholesaler_drilldown_screen.dart';
-import '../screens/cash_collect_screen.dart';
+// import '../screens/cash_collect_screen.dart';
 import '../screens/other_expense_screen.dart'; // ← FAB destination
+import '../screens/shop_selection_screen.dart';
 
 /// ========= TOKENS =========
 const _brandGradient = LinearGradient(
@@ -631,15 +632,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                               MaterialPageRoute(
                                                   builder: (_) => const AllShopsScreen())),
                                         ),
-                                        _interactiveGlassCard(
-                                          key: const ValueKey('card_sales'),
-                                          icon: Icons.trending_up,
-                                          title: 'Sales',
-                                          onTap: () => Navigator.push(
-                                              context,
-                                              MaterialPageRoute(
-                                                  builder: (_) => const SalesScreen())),
-                                        ),
+                                       _interactiveGlassCard(
+  key: const ValueKey('card_sales'),
+  icon: Icons.trending_up,
+  title: 'Sales',
+  onTap: () => Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => const ShopSelectionScreen(next: NextAction.sales),
+    ),
+  ),
+),
                                         _interactiveGlassCard(
                                           key: const ValueKey('card_orders'),
                                           icon: Icons.shopping_bag,
@@ -651,15 +654,20 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                         ),
                                         if (isAdmin) // ONLY Admin sees this card
                                           _interactiveGlassCard(
-                                            key: const ValueKey('card_cash_collect'),
-                                            icon: Icons.attach_money_rounded,
-                                            title: 'Cash Collect',
-                                            onTap: () => Navigator.push(
-                                                context,
-                                                MaterialPageRoute(
-                                                    builder: (_) =>
-                                                        const CashCollectScreen())),
-                                          ),
+  key: const ValueKey('card_cash_collect'),
+  icon: Icons.attach_money_rounded,
+  title: 'Cash Collect',
+  onTap: () {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const ShopSelectionScreen(
+          next: NextAction.cashCollect, // 👈 shop select first
+        ),
+      ),
+    );
+  },
+),
                                       ],
                                     ),
                                   ),
