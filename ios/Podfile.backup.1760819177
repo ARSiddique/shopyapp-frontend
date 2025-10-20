@@ -1,0 +1,88 @@
+ENV['FLUTTER_ROOT'] = '/Users/rathi/development/flutter'
+ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+platform :ios, '15.0'
+
+project 'Runner', {
+  'Debug'   => :debug,
+  'Profile' => :release,
+  'Release' => :release,
+}
+
+require File.expand_path(File.join('..', 'Flutter', 'podhelper.rb'), __FILE__)
+flutter_ios_podfile_setup
+use_modular_headers!
+
+target 'Runner' do
+  use_frameworks! :linkage => :static
+  flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+end
+
+post_install do |installer|
+  # Detect bad tokens (-G* flags or $(WARNING_CFLAGS) expansions)
+  bad_token? = lambda { |s| s =~ /\-G\S*/ || s =~ /\$\(\s*WARNING_CFLAGS\s*\)/ }
+
+  # Remove them from strings/arrays
+  cleanse = lambda do |val|
+    case val
+    when String
+      val.gsub(/\-G\S*/, '')
+         .gsub(/\$\(\s*WARNING_CFLAGS\s*\)/, '')
+         .squeeze(' ')
+         .strip
+    when Array
+      val.reject { |t| t.is_a?(String) && (t =~ /\-G\S*/ || t =~ /\$\(\s*WARNING_CFLAGS\s*\)/) }
+    else
+      val
+    end
+  end
+
+  # Scrub all build settings on Pods and Runner targets
+  (installer.pods_project.targets + installer.aggregate_targets.flat_map { |a| a.user_project.native_targets }).each do |t|
+    t.build_configurations.each do |cfg|
+      # Minimum iOS + avoid x86_64 sim to keep toolchains simple
+      cfg.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
+      cfg.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'i386 x86_64'
+      cfg.build_settings['ARCHS[sdk=iphonesimulator*]'] = 'arm64'
+
+      # Don'''t pass -G via WARNING_CFLAGS; use proper Xcode knob instead
+      cfg.build_settings['GCC_WARN_INHIBIT_ALL_WARNINGS'] = 'YES'
+      cfg.build_settings['WARNING_CFLAGS'] = []
+
+      cfg.build_settings.keys.each do |k|
+        v = cfg.build_settings[k]
+        next unless v.is_a?(String) || v.is_a?(Array)
+        if (v.is_a?(String) && bad_token?.call(v)) || (v.is_a?(Array) && v.any? { |x| x.is_a?(String) && bad_token?.call(x) })
+          cfg.build_settings[k] = cleanse.call(v)
+        end
+      end
+    end
+  end
+
+  # Patch any .xcconfig in Pods project
+  installer.pods_project.files.each do |f|
+    next unless f.path.end_with?('.xcconfig')
+    p = f.real_path
+    txt = File.read(p)
+    txt = txt
+      .gsub(/\-G\S*/, '')
+      .gsub(/\$\(\s*WARNING_CFLAGS\s*\)/, '')
+      .gsub(/^\s*WARNING_CFLAGS\s*=.*$/i, 'WARNING_CFLAGS =')
+    File.write(p, txt)
+  end
+
+  # Patch Flutter/Debug|Release|Profile.xcconfig
+  flutter_dir = File.expand_path('Flutter', File.dirname(__FILE__))
+  %w[Debug.xcconfig Release.xcconfig Profile.xcconfig].each do |fn|
+    fp = File.join(flutter_dir, fn)
+    next unless File.exist?(fp)
+    txt = File.read(fp)
+    txt = txt
+      .gsub(/\-G\S*/, '')
+      .gsub(/\$\(\s*WARNING_CFLAGS\s*\)/, '')
+      .gsub(/^\s*WARNING_CFLAGS\s*=.*$/i, 'WARNING_CFLAGS =')
+    File.write(fp, txt)
+  end
+
+  # Keep Flutter'''s additional settings per target
+  installer.pods_project.targets.each { |t| flutter_additional_ios_build_settings(t) }
+end

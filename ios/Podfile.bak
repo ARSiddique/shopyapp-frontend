@@ -1,0 +1,42 @@
+platform :ios, '13.0'
+
+def flutter_root
+  generated_xcode_build_settings_path = File.expand_path(File.join('..', 'Flutter', 'Generated.xcconfig'), __FILE__)
+  unless File.exist?(generated_xcode_build_settings_path)
+    raise "Generated.xcconfig must exist. Run 'flutter pub get' first."
+  end
+  File.foreach(generated_xcode_build_settings_path) do |line|
+    matches = line.match(/FLUTTER_ROOT\=(.*)/)
+    return matches[1].strip if matches
+  end
+  raise "FLUTTER_ROOT not found in Generated.xcconfig."
+end
+
+load File.join(flutter_root, 'packages', 'flutter_tools', 'bin', 'podhelper.rb')
+
+project 'Runner', {
+  'Debug' => :debug,
+  'Profile' => :release,
+  'Release' => :release,
+}
+
+target 'Runner' do
+  flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |t|
+    begin
+      flutter_additional_ios_build_settings(t)
+    rescue
+    end
+  end
+  Dir[File.join(installer.sandbox.root, 'gRPC-Core/**/*.h')].each do |file|
+    txt = File.read(file)
+    fixed = txt.gsub(/Traits::template\s+CallSeqFactory\(/, 'Traits::template CallSeqFactory<>(')
+    if txt != fixed
+      File.write(file, fixed)
+      puts "Patched #{file} (added <> after CallSeqFactory)"
+    end
+  end
+end

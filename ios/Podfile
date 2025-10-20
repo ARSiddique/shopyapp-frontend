@@ -1,0 +1,66 @@
+# Podfile — Flutter iOS (static frameworks + gRPC auto-patch)
+platform :ios, '13.0'
+
+# Resolve FLUTTER_ROOT from Generated.xcconfig (created by `flutter pub get`)
+def flutter_root
+  generated_xcode_build_settings_path = File.expand_path(File.join('..', 'Flutter', 'Generated.xcconfig'), __FILE__)
+  unless File.exist?(generated_xcode_build_settings_path)
+    raise "Generated.xcconfig must exist. Run 'flutter pub get' first."
+  end
+  File.foreach(generated_xcode_build_settings_path) do |line|
+    matches = line.match(/FLUTTER_ROOT\=(.*)/)
+    return matches[1].strip if matches
+  end
+  raise "FLUTTER_ROOT not found in Generated.xcconfig."
+end
+
+load File.join(flutter_root, 'packages', 'flutter_tools', 'bin', 'podhelper.rb')
+
+project 'Runner', {
+  'Debug' => :debug,
+  'Profile' => :release,
+  'Release' => :release,
+}
+
+target 'Runner' do
+  # Satisfy Swift pods needing module maps by using frameworks (static)
+  use_frameworks! :linkage => :static
+  # If you prefer modular headers instead, remove the line above and use:
+  # use_modular_headers!
+
+  flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+end
+
+post_install do |installer|
+  # keep Flutter build settings
+  installer.pods_project.targets.each do |t|
+    begin
+      flutter_additional_ios_build_settings(t)
+    rescue
+    end
+  end
+
+  # gRPC header fix for Xcode 16/17 — Core AND C++
+  ['gRPC-Core', 'gRPC-C++'].each do |podname|
+    Dir[File.join(installer.sandbox.root, podname, '**/*.h')].each do |file|
+      txt = File.read(file)
+      fixed = txt.gsub(/Traits::template\s+CallSeqFactory\(/, 'Traits::template CallSeqFactory<>(')
+      if txt != fixed
+        File.write(file, fixed)
+        puts "Patched #{file} (added <> after CallSeqFactory)"
+      end
+    end
+  end
+
+  # drop any invalid -G* compiler flags (seen with some SSL/gRPC pods)
+  installer.pods_project.targets.each do |t|
+    next unless ['BoringSSL-GRPC', 'gRPC-C++', 'gRPC-Core'].include?(t.name)
+    t.source_build_phase.files.each do |f|
+      next unless f.settings && f.settings['COMPILER_FLAGS']
+      flags = f.settings['COMPILER_FLAGS'].split
+      flags.reject! { |flag| flag == '-GCC_WARN_INHIBIT_ALL_WARNINGS' || flag.start_with?('-G') }
+      f.settings['COMPILER_FLAGS'] = flags.join(' ')
+    end
+  end
+end
+
