@@ -23,8 +23,8 @@ const _kActiveIdle   = 'auto_logout_active_idle_minutes';
 const _kInactiveIdle = 'auto_logout_inactive_minutes';
 
 // DEFAULTS (when prefs not set)
-const int kDefaultActiveMinutes   = 5;   // ✅ Active default = 5
-const int kDefaultInactiveMinutes = 10;  // ✅ Inactive default = 10
+const int kDefaultActiveMinutes   = 120;   // ✅ Active default = 5
+const int kDefaultInactiveMinutes = 240;  // ✅ Inactive default = 10
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -125,7 +125,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
 
   Future<void> _loadSettings() async {
     final sp = await SharedPreferences.getInstance();
-    manualOnly   = sp.getBool(_kManualOnly) ?? false; // default = Auto ON
+    manualOnly   = sp.getBool(_kManualOnly) ?? true; // default = Auto ON
     activeMins   = sp.getInt(_kActiveIdle) ?? kDefaultActiveMinutes;
     inactiveMins = sp.getInt(_kInactiveIdle) ?? kDefaultInactiveMinutes;
   }

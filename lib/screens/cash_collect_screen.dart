@@ -75,26 +75,26 @@ class _CashCollectScreenState extends State<CashCollectScreen> {
     }
   }
 
-Future<void> _setCollected(_RowVM row, bool collected) async {
-  final app = context.read<AppDataProvider>();
-  final user = app.loggedInUser ?? {};
+  Future<void> _setCollected(_RowVM row, bool collected) async {
+    final app = context.read<AppDataProvider>();
+    final user = app.loggedInUser ?? {};
 
-  await app.setCashCollected(
-    shopId: row.shopId,
-    shopName: row.shopName,
-    from: row.day,
-    to: row.day,
-    collected: collected,
-    cashAmount: row.cash.toDouble(),
-    byUserId: (user['uid'] ?? '').toString(),
-    byUserName: (user['name'] ?? user['email'] ?? '').toString(),
-  );
+    await app.setCashCollected(
+      shopId: row.shopId,
+      shopName: row.shopName,
+      from: row.day,
+      to: row.day,
+      collected: collected,
+      cashAmount: row.cash.toDouble(),
+      byUserId: (user['uid'] ?? '').toString(),
+      byUserName: (user['name'] ?? user['email'] ?? '').toString(),
+    );
 
-  setState(() => row.collected = collected);
+    setState(() => row.collected = collected);
 
-  // optional: rows + totals fresh karne ke liye
-  await _rebuild();
-}
+    // optional: rows + totals fresh karne ke liye
+    await _rebuild();
+  }
 
   Future<void> _rebuild() async {
     final app = context.read<AppDataProvider>();
@@ -535,7 +535,8 @@ Future<void> _setCollected(_RowVM row, bool collected) async {
                                                   SnackBar(
                                                     content: const Text('Marked Collected'),
                                                     action: SnackBarAction(
-                                                      label: 'UNDO',
+                                                      // CHANGED: label text
+                                                      label: 'Do not collect',
                                                       onPressed: () => _setCollected(r, false),
                                                     ),
                                                   ),
@@ -959,60 +960,56 @@ class _PeriodControls extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: _mutedStroke),
       ),
-      child:Row(
-  // center badge ko bachi hui width deni hai, isliye max rakho
-  mainAxisSize: MainAxisSize.max,
-  children: [
-    IconButton(
-      tooltip: 'Previous',
-      icon: const Icon(Icons.chevron_left),
-      onPressed: loading ? null : onPrev,
-      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-      visualDensity: VisualDensity.compact,
-      padding: EdgeInsets.zero,
-    ),
-
-    // ⬇️ CENTER BADGE gets the remaining width
-    Expanded(
-      child: InkWell(
-        borderRadius: BorderRadius.circular(6),
-        onTap: loading ? null : onTapLabel,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-          child: Row(
-            mainAxisSize: MainAxisSize.max,
-            children: [
-              Icon(icon, color: Colors.tealAccent.shade400, size: 18),
-              const SizedBox(width: 6),
-
-              // ⬇️ text shrink with ellipsis (no overflow)
-              Flexible(
-                child: Text(
-                  text,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontWeight: FontWeight.w700),
+      child: Row(
+        // center badge ko bachi hui width deni hai, isliye max rakho
+        mainAxisSize: MainAxisSize.max,
+        children: [
+          IconButton(
+            tooltip: 'Previous',
+            icon: const Icon(Icons.chevron_left),
+            onPressed: loading ? null : onPrev,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+          ),
+          // ⬇️ CENTER BADGE gets the remaining width
+          Expanded(
+            child: InkWell(
+              borderRadius: BorderRadius.circular(6),
+              onTap: loading ? null : onTapLabel,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                child: Row(
+                  mainAxisSize: MainAxisSize.max,
+                  children: [
+                    Icon(icon, color: Colors.tealAccent.shade400, size: 18),
+                    const SizedBox(width: 6),
+                    // ⬇️ text shrink with ellipsis (no overflow)
+                    Flexible(
+                      child: Text(
+                        text,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    const Icon(Icons.edit_calendar_outlined, size: 16, color: Colors.white70),
+                  ],
                 ),
               ),
-
-              const SizedBox(width: 6),
-              const Icon(Icons.edit_calendar_outlined, size: 16, color: Colors.white70),
-            ],
+            ),
           ),
-        ),
+          IconButton(
+            tooltip: 'Next',
+            icon: const Icon(Icons.chevron_right),
+            onPressed: loading ? null : onNext,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+          ),
+        ],
       ),
-    ),
-
-    IconButton(
-      tooltip: 'Next',
-      icon: const Icon(Icons.chevron_right),
-      onPressed: loading ? null : onNext,
-      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-      visualDensity: VisualDensity.compact,
-      padding: EdgeInsets.zero,
-    ),
-  ],
-)
     );
   }
 }

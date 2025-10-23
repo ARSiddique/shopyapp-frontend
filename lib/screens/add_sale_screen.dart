@@ -32,12 +32,18 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
   /// Single source of truth for picked day (midnight)
   late DateTime _selectedDay;
 
+  /// Employees: whether Yesterday is allowed (disabled if yesterday sale already exists)
+  bool _yesterdayEnabled = true;
+
   bool get _isEmployee {
     final app = context.read<AppDataProvider>();
     final me = app.loggedInUser ?? {};
     final role = (me['role'] ?? '').toString().toLowerCase();
     return role == 'employee';
   }
+
+  DateTime get _today => _dayOnly(DateTime.now());
+  DateTime get _yesterday => _today.subtract(const Duration(days: 1));
 
   @override
   void initState() {
@@ -46,6 +52,11 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
       _toDate(widget.existingSale?['createdAt']) ?? DateTime.now(),
     );
     _prefillIfEditingOnLoad();
+
+    // After first frame, compute yesterday availability (if employee)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _refreshEmployeeDayOptions();
+    });
   }
 
   void _prefillIfEditingOnLoad() {
@@ -89,11 +100,19 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
         _isEmployee ? allShops.where((s) => assigned.contains(s)).toList() : allShops;
 
     // Decide selected shop
+    final prevSelectedShop = _selectedShop;
     _selectedShop ??= (widget.existingSale?['shop']?.toString().isNotEmpty == true)
         ? widget.existingSale!['shop'].toString()
         : (widget.shopName?.isNotEmpty == true
             ? widget.shopName
             : (shopOptions.isNotEmpty ? shopOptions.first : null));
+
+    // If the chosen shop changed, refresh employee options
+    if (_isEmployee && (_selectedShop ?? '').isNotEmpty && _selectedShop != prevSelectedShop) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _refreshEmployeeDayOptions();
+      });
+    }
 
     final hasMultipleAssigned = _isEmployee && shopOptions.length > 1;
     final shouldShowBackToSelection = hasMultipleAssigned;
@@ -166,6 +185,8 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
                           onChanged: (v) async {
                             setState(() => _selectedShop = v);
                             await _prefillFromServer(_selectedDay); // reload fields
+                            // refresh yesterday availability (only matters if employee role changes later)
+                            await _refreshEmployeeDayOptions();
                           },
                           decoration: const InputDecoration(
                             labelText: 'Shop',
@@ -177,34 +198,42 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
 
                       if (!_isEmployee) const SizedBox(height: 16),
 
-                      // ======== Center Date Stepper (for everyone) ========
-                      _DateStepper(
-                        day: _selectedDay,
-                        canGoPrev: _canGoPrev(_selectedDay),
-                        canGoNext: _canGoNext(_selectedDay),
-                        onPrev: () async {
-                          final d = _selectedDay.subtract(const Duration(days: 1));
-                          await _setDayAndPrefill(d);
-                        },
-                        onNext: () async {
-                          final d = _selectedDay.add(const Duration(days: 1));
-                          await _setDayAndPrefill(d);
-                        },
-                        onPick: () async {
-                          final limits = _pickerBounds();
-                          final picked = await showDatePicker(
-                            context: context,
-                            initialDate: _selectedDay,
-                            firstDate: limits.$1,
-                            lastDate: limits.$2,
-                          );
-                          if (picked != null) {
-                            await _setDayAndPrefill(picked);
-                          }
-                        },
-                      ),
+                      // ======== Date selection ========
+                      if (_isEmployee)
+                        _EmployeeDaySelector(
+                          day: _selectedDay,
+                          yesterdayEnabled: _yesterdayEnabled,
+                          onSelectToday: () => _setDayAndPrefill(_today),
+                          onSelectYesterday: () => _setDayAndPrefill(_yesterday),
+                        )
+                      else
+                        _DateStepper(
+                          day: _selectedDay,
+                          canGoPrev: _canGoPrev(_selectedDay),
+                          canGoNext: _canGoNext(_selectedDay),
+                          onPrev: () async {
+                            final d = _selectedDay.subtract(const Duration(days: 1));
+                            await _setDayAndPrefill(d);
+                          },
+                          onNext: () async {
+                            final d = _selectedDay.add(const Duration(days: 1));
+                            await _setDayAndPrefill(d);
+                          },
+                          onPick: () async {
+                            final limits = _pickerBounds();
+                            final picked = await showDatePicker(
+                              context: context,
+                              initialDate: _selectedDay,
+                              firstDate: limits.$1,
+                              lastDate: limits.$2,
+                            );
+                            if (picked != null) {
+                              await _setDayAndPrefill(picked);
+                            }
+                          },
+                        ),
                       const SizedBox(height: 16),
-                      // ===================================================
+                      // =================================
 
                       _amountField(_cashC, 'Cash'),
                       const SizedBox(height: 12),
@@ -260,7 +289,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
       inputFormatters: [
         FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
       ],
-      decoration: InputDecoration( // (not const) — fixes "Invalid constant value"
+      decoration: InputDecoration(
         labelText: label,
         border: const OutlineInputBorder(),
         prefixText: r'$ ',
@@ -344,9 +373,9 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
 
   // Employees: only today/yesterday; Admin/Manager: last ~4 months till today
   (DateTime, DateTime) _pickerBounds() {
-    final today = _dayOnly(DateTime.now());
+    final today = _today;
     if (_isEmployee) {
-      final first = today.subtract(const Duration(days: 1));
+      final first = _yesterday;
       return (first, today);
     }
     // admin/manager ~4 months back
@@ -405,6 +434,36 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     }
   }
 
+  // ---------- Employee Yesterday availability ----------
+
+  Future<void> _refreshEmployeeDayOptions() async {
+    if (!_isEmployee) return;
+    if ((_selectedShop ?? '').isEmpty) {
+      setState(() => _yesterdayEnabled = false);
+      return;
+    }
+    final hasYesterday = await _hasSaleForDay(_selectedShop!, _yesterday);
+    // Yesterday is enabled only if there is NO sale for yesterday.
+    setState(() => _yesterdayEnabled = !hasYesterday);
+  }
+
+  Future<bool> _hasSaleForDay(String shop, DateTime day) async {
+    try {
+      final app = context.read<AppDataProvider>();
+      final dayKey = app.dayKeyOf(day);
+      final q = FirebaseFirestore.instance
+          .collection('sales')
+          .where('shop', isEqualTo: shop)
+          .where('dayKey', isEqualTo: dayKey)
+          .limit(1);
+      final snap = await q.get();
+      return snap.docs.isNotEmpty;
+    } catch (_) {
+      // On error, be conservative: consider yesterday as already used -> disable
+      return true;
+    }
+  }
+
   // ---------- Submit / Update ----------
 
   double _parse(String s) => double.tryParse(s.trim()) ?? 0.0;
@@ -440,6 +499,24 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     if ((_selectedShop ?? '').isEmpty) {
       _showSnack(messenger, theme, 'Select a shop');
       return;
+    }
+
+    // Employee-specific guardrails (UI already enforces, but we double-check)
+    if (_isEmployee) {
+      final d = _selectedDay;
+      final isT = _dayOnly(d).isAtSameMomentAs(_today);
+      final isY = _dayOnly(d).isAtSameMomentAs(_yesterday);
+      if (!isT && !isY) {
+        _showSnack(messenger, theme, 'Employees can only submit for Today or Yesterday');
+        return;
+      }
+      if (isY) {
+        final hasY = await _hasSaleForDay(_selectedShop!, _yesterday);
+        if (hasY) {
+          _showSnack(messenger, theme, 'Yesterday sale already submitted');
+          return;
+        }
+      }
     }
 
     final app = context.read<AppDataProvider>();
@@ -487,7 +564,7 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
         'total': total,
         'createdAt': Timestamp.fromDate(createdAt),
         'dayKey': dayKey,
-        'source': 'employee_manual',
+        'source': _isEmployee ? 'employee_manual' : 'admin_or_manager_manual',
       };
 
       await FirebaseFirestore.instance.collection('sales').add(data);
@@ -495,6 +572,11 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
       await app.fetchSales();
       if (!mounted) return;
       _showSnack(messenger, theme, 'Sale added', ok: true);
+
+      // After a successful submit, re-evaluate yesterday availability (in case day == today)
+      if (_isEmployee) {
+        await _refreshEmployeeDayOptions();
+      }
 
       // Reset for next entry (stay on same day)
       _cashC.clear();
@@ -571,7 +653,66 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
   }
 }
 
-/// ======= Center Date Stepper widget =======
+/// ======= Employees: Today / Yesterday selector (no date tab) =======
+class _EmployeeDaySelector extends StatelessWidget {
+  final DateTime day;
+  final bool yesterdayEnabled;
+  final VoidCallback onSelectToday;
+  final VoidCallback onSelectYesterday;
+
+  const _EmployeeDaySelector({
+    required this.day,
+    required this.yesterdayEnabled,
+    required this.onSelectToday,
+    required this.onSelectYesterday,
+  });
+
+  bool _isSameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  DateTime _dayOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  @override
+  Widget build(BuildContext context) {
+    final today = _dayOnly(DateTime.now());
+    final yesterday = today.subtract(const Duration(days: 1));
+
+    final isToday = _isSameDay(day, today);
+    final isYesterday = _isSameDay(day, yesterday);
+
+    // When disabled, ChoiceChip greys out if onSelected is null; add slight opacity for “blur” feel.
+    final yesterdayChip = Opacity(
+      opacity: yesterdayEnabled ? 1.0 : 0.55,
+      child: ChoiceChip(
+        label: const Text('Yesterday'),
+        selected: isYesterday,
+        onSelected: yesterdayEnabled ? (_) => onSelectYesterday() : null,
+      ),
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        const Text('Select Day', style: TextStyle(fontWeight: FontWeight.w700)),
+        const SizedBox(height: 10),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            ChoiceChip(
+              label: const Text('Today'),
+              selected: isToday,
+              onSelected: (_) => onSelectToday(),
+            ),
+            const SizedBox(width: 10),
+            yesterdayChip,
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// ======= Center Date Stepper widget (Admin/Manager) =======
 class _DateStepper extends StatelessWidget {
   final DateTime day;
   final bool canGoPrev;
