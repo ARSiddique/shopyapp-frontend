@@ -41,12 +41,6 @@ android {
                 keyPassword = keystoreProperties["keyPassword"] as String
                 storeFile = file(keystoreProperties["storeFile"] as String)
                 storePassword = keystoreProperties["storePassword"] as String
-
-                // [CLOVER] Force V1-only signing for Clover/POS compatibility
-                enableV1Signing = true     // [CLOVER] REQUIRED
-                enableV2Signing = false    // [CLOVER] disable
-                enableV3Signing = false    // [CLOVER] disable (no incremental signing)
-                enableV4Signing = false    // [CLOVER] disable
             }
         }
     }
@@ -63,7 +57,6 @@ android {
             //     getDefaultProguardFile("proguard-android-optimize.txt"),
             //     "proguard-rules.pro"
             // )
-            // [CLOVER] Keep minify/shrink off while validating on POS devices
         }
         debug {
             // default debug signing
