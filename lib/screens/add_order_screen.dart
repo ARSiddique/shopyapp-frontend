@@ -2,19 +2,31 @@
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/app_data_provider.dart';
 
 class AddOrderScreen extends StatefulWidget {
-  const AddOrderScreen({
-    super.key,
-    required this.shopName,
-    required this.wholesalerName,
-  });
+  /// If provided → we are receiving/updating an existing order.
+  /// If null      → we will create a new order directly in "Received" state.
+  final String? orderId;
 
+  /// Read-only labels shown on the form (always required for this screen).
   final String shopName;
   final String wholesalerName;
+
+  /// Optional initial payload (not strictly required by this screen,
+  /// but kept for convenience if you pass prefilled values).
+  final Map<String, dynamic>? initial;
+
+  const AddOrderScreen({
+    super.key,
+    this.orderId,
+    required this.shopName,
+    required this.wholesalerName,
+    this.initial,
+  });
 
   @override
   State<AddOrderScreen> createState() => _AddOrderScreenState();
@@ -23,15 +35,15 @@ class AddOrderScreen extends StatefulWidget {
 class _AddOrderScreenState extends State<AddOrderScreen> {
   final _formKey = GlobalKey<FormState>();
 
-  double _orderAmount = 0.0;
-  double _orderAmount2 = 0.0;
+  double? _invoice1;
+  double? _invoice2;
 
   bool _isSubmitting = false;
   bool _isUploading = false;
   String? _localInvoiceName;
   Uint8List? _invoiceBytes;
 
-  // --------- Helpers ---------
+  // ---------- Helpers ----------
   Future<void> _pickInvoice() async {
     try {
       final x = await ImagePicker().pickImage(source: ImageSource.camera);
@@ -44,8 +56,9 @@ class _AddOrderScreenState extends State<AddOrderScreen> {
       });
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Failed to pick invoice: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to pick invoice: $e')),
+      );
     }
   }
 
@@ -65,23 +78,26 @@ class _AddOrderScreenState extends State<AddOrderScreen> {
       return url;
     } catch (e) {
       if (!mounted) return null;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Invoice upload failed: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Invoice upload failed: $e')),
+      );
       return null;
     } finally {
       if (mounted) setState(() => _isUploading = false);
     }
   }
 
+  // ---------- UI ----------
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppDataProvider>();
+    final canSubmit = !_isSubmitting && !_isUploading;
 
-    final isFormValid =
-        _orderAmount > 0 && !_isSubmitting && !_isUploading;
+    final isEditExisting = (widget.orderId != null && widget.orderId!.isNotEmpty);
+    final title = isEditExisting ? 'Receive Order' : 'Create & Receive Order';
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Add Order')),
+      appBar: AppBar(title: Text(title)),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Form(
@@ -110,45 +126,52 @@ class _AddOrderScreenState extends State<AddOrderScreen> {
               ),
               const SizedBox(height: 16),
 
-              // Amount 1 (required)
+              // Invoice 1 (required)
               TextFormField(
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
                 decoration: const InputDecoration(
                   labelText: 'Invoice Amount',
+                  hintText: 'e.g. 1250.00',
                   border: OutlineInputBorder(),
                 ),
-                onChanged: (val) =>
-                    setState(() => _orderAmount = double.tryParse(val.trim()) ?? 0),
-                validator: (v) =>
-                    (double.tryParse(v?.trim() ?? '') ?? 0) <= 0
-                        ? 'Invalid amount'
-                        : null,
+                validator: (v) {
+                  final d = double.tryParse(v?.trim() ?? '');
+                  if (d == null || d <= 0) return 'Invalid amount';
+                  return null;
+                },
+                onSaved: (v) => _invoice1 = double.tryParse(v!.trim()),
               ),
               const SizedBox(height: 12),
 
-              // Amount 2 (optional)
+              // Invoice 2 (optional)
               TextFormField(
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
                 decoration: const InputDecoration(
-                  labelText: 'Invoice2 Amount (optional)',
+                  labelText: 'Invoice 2 Amount (optional)',
                   border: OutlineInputBorder(),
                 ),
-                onChanged: (val) =>
-                    setState(() => _orderAmount2 = double.tryParse(val.trim()) ?? 0),
+                onSaved: (v) {
+                  final t = (v == null || v.trim().isEmpty)
+                      ? null
+                      : double.tryParse(v.trim());
+                  _invoice2 = t;
+                },
               ),
               const SizedBox(height: 16),
 
-              // Invoice attach
+              // Invoice photo (optional)
               Row(
                 children: [
                   Expanded(
                     child: OutlinedButton.icon(
                       icon: const Icon(Icons.receipt_long),
-                      label: Text(_invoiceBytes == null
-                          ? 'Attach Invoice Photo'
-                          : 'Attached: ${_localInvoiceName ?? 'invoice.jpg'}'),
+                      label: Text(
+                        _invoiceBytes == null
+                            ? 'Attach Invoice Photo (optional)'
+                            : 'Attached: ${_localInvoiceName ?? 'invoice.jpg'}',
+                      ),
                       onPressed: _isUploading ? null : _pickInvoice,
                     ),
                   ),
@@ -173,9 +196,11 @@ class _AddOrderScreenState extends State<AddOrderScreen> {
                           width: 16,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : const Icon(Icons.send),
-                  label: Text(_isSubmitting ? 'Submitting…' : 'Submit Order'),
-                  onPressed: isFormValid ? () => _submit(app) : null,
+                      : const Icon(Icons.check_circle),
+                  label: Text(_isSubmitting
+                      ? 'Submitting…'
+                      : (isEditExisting ? 'Mark as Received' : 'Create & Receive')),
+                  onPressed: canSubmit ? () => _submit(app, isEditExisting) : null,
                 ),
               ),
             ],
@@ -185,39 +210,55 @@ class _AddOrderScreenState extends State<AddOrderScreen> {
     );
   }
 
-  Future<void> _submit(AppDataProvider app) async {
+  Future<void> _submit(AppDataProvider app, bool isEditExisting) async {
     if (!_formKey.currentState!.validate()) return;
+    _formKey.currentState!.save();
 
     final messenger = ScaffoldMessenger.of(context);
-
     setState(() => _isSubmitting = true);
-    try {
-      String? invoiceUrl;
-      if (_invoiceBytes != null) {
-        invoiceUrl = await _uploadInvoiceIfAny(
-          app,
-          widget.shopName,
-          widget.wholesalerName,
-        );
-      }
 
-      final err = await app.placeOrderUniquePerDay(
-        shopName: widget.shopName,
-        wholesalerId: widget.wholesalerName,   // fallback id = name
-        wholesalerName: widget.wholesalerName,
-        amount: _orderAmount,
-        amount2: _orderAmount2 == 0 ? null : _orderAmount2,
-        note: null,
-        invoiceUrl: invoiceUrl,
+    try {
+      // Upload photo if any
+      final invoiceUrl = await _uploadInvoiceIfAny(
+        app,
+        widget.shopName,
+        widget.wholesalerName,
       );
 
-      if (err != null) {
-        messenger.showSnackBar(SnackBar(content: Text(err)));
-        return;
+      if (isEditExisting) {
+        // ✅ Update existing order and mark as Received
+        await app.receiveOrderWithInvoices(
+          orderId: widget.orderId!, // safe: isEditExisting == true
+          shopName: widget.shopName,
+          wholesalerName: widget.wholesalerName,
+          invoice1: _invoice1,
+          invoice2: _invoice2,
+          invoiceUrl: invoiceUrl,
+          note: null,
+        );
+      } else {
+        // ✅ Create a fresh order and mark it as Received immediately
+        final dayKey = DateFormat('yyyy-MM-dd').format(DateTime.now());
+        await app.addOrder({
+          'shopName'      : widget.shopName,
+          'wholesalerName': widget.wholesalerName,
+          'amount'        : _invoice1 ?? 0.0,
+          if (_invoice2 != null) 'amount2': _invoice2,
+          if (invoiceUrl != null && invoiceUrl.isNotEmpty) 'invoiceUrl': invoiceUrl,
+          'status'        : 'Received',
+          'note'          : '',
+          'dayKey'        : dayKey,
+          // createdAt/updatedAt will be set inside addOrder()
+        });
       }
 
-      messenger.showSnackBar(const SnackBar(content: Text('Order submitted')));
-      if (mounted) Navigator.of(context).pop();
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text(isEditExisting
+            ? 'Order marked as Received'
+            : 'Order created in Received state')),
+      );
+      Navigator.of(context).pop(true);
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
     } finally {

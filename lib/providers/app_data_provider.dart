@@ -380,6 +380,66 @@ String? shopIdForName(String name) => _shopIdByName[name.trim().toLowerCase()];
     return qs.docs.isNotEmpty;
   }
 
+// SIMPLE PLACE (Add +)
+Future<void> placeSimpleOrder({
+  required String shopName,
+  required String wholesalerName,
+  required String employeeName,
+  required String itemName,
+  double? approxPrice,
+  double? quantity,
+  String? note,
+}) async {
+  final dayKey = DateFormat('yyyy-MM-dd').format(DateTime.now());
+  final user = _loggedInUser ?? {};
+  final payload = {
+    'shopName'      : shopName,
+    'wholesalerName': wholesalerName,
+    'createdByUid'  : user['uid'],
+    'createdByName' : employeeName,
+    'itemName'      : itemName,
+    if (approxPrice != null) 'approxPrice': approxPrice,
+    if (quantity    != null) 'quantity'   : quantity,
+    'note'          : note ?? '',
+    'status'        : 'Pending',
+    'createdAt'     : FieldValue.serverTimestamp(),
+    'updatedAt'     : FieldValue.serverTimestamp(),
+    'dayKey'        : dayKey,
+  };
+  await addOrder(payload);
+}
+
+// RECEIVE (Receive button → old AddOrder form)
+Future<void> receiveOrderWithInvoices({
+  required String orderId,
+  required String shopName,
+  required String wholesalerName,
+  double? invoice1,
+  double? invoice2,
+  String? invoiceUrl,
+  String? note,
+}) async {
+  final update = {
+    'shopName'      : shopName,
+    'wholesalerName': wholesalerName,
+    if (invoice1 != null) 'amount' : invoice1,
+    if (invoice2 != null) 'amount2': invoice2,
+    if (invoiceUrl != null && invoiceUrl.isNotEmpty) 'invoiceUrl': invoiceUrl,
+    'note'          : note ?? '',
+    'status'        : 'Received',
+    'updatedAt'     : FieldValue.serverTimestamp(),
+  };
+  await firestore.collection('orders').doc(orderId).update(update);
+
+  final i = _orders.indexWhere((o) => o['id'] == orderId);
+  if (i != -1) {
+    _orders[i] = {..._orders[i], ...update, 'updatedAt': DateTime.now()};
+    notifyListeners();
+  }
+}
+
+
+
   Future<void> fetchOrdersPage({int pageSize = 20}) async {
     try {
       Query<Map<String, dynamic>> q = firestore
@@ -1320,29 +1380,27 @@ Future<Set<String>> shopsWithSaleOn(DateTime day) async {
 
   // --------- Orders ---------
   Future<void> addOrder(Map<String, dynamic> order) async {
-    try {
-      order['status'] ??= 'Pending';
-      order['createdAt'] ??= FieldValue.serverTimestamp(); // ✅ here
-order['updatedAt'] = FieldValue.serverTimestamp();   // (optional) keep updatedAt too
-      order['canRequestEdit'] ??= true;
+  try {
+    order['status'] ??= 'Pending';
+    order['updatedAt'] = FieldValue.serverTimestamp();
 
-      if (order['id'] != null && order['id'].toString().isNotEmpty) {
-        final id = order['id'].toString();
-        await FirebaseFirestore.instance.collection('orders').doc(id).set(order);
-        _orders
-            .add({...order, 'id': id, 'createdAt': _toDate(order['createdAt'])});
-      } else {
-        final docRef =
-            await FirebaseFirestore.instance.collection('orders').add(order);
-        _orders.add(
-            {...order, 'id': docRef.id, 'createdAt': _toDate(order['createdAt'])});
-      }
-
-      notifyListeners();
-    } catch (e) {
-      log('Error adding order: $e', name: 'Orders');
+    if (order['id'] != null && order['id'].toString().isNotEmpty) {
+      final id = order['id'].toString();
+      final update = {...order}..remove('id')..remove('createdAt'); // ⬅️
+      await FirebaseFirestore.instance.collection('orders').doc(id).update(update);
+      final i = _orders.indexWhere((o) => o['id'] == id);
+      if (i != -1) _orders[i] = {..._orders[i], ...update};
+    } else {
+      order['createdAt'] ??= FieldValue.serverTimestamp();
+      final docRef = await FirebaseFirestore.instance.collection('orders').add(order);
+      _orders.add({...order, 'id': docRef.id, 'createdAt': _toDate(order['createdAt'])});
     }
+    notifyListeners();
+  } catch (e) {
+    log('Error adding order: $e', name: 'Orders');
   }
+}
+
 
   DateTime _toDate(dynamic raw) {
     if (raw is Timestamp) return raw.toDate();
@@ -1350,6 +1408,11 @@ order['updatedAt'] = FieldValue.serverTimestamp();   // (optional) keep updatedA
     if (raw is String) return DateTime.tryParse(raw) ?? DateTime.now();
     return DateTime.now();
   }
+
+
+
+
+
 
 Future<void> forwardOrder(String id) async {
   if (!isAdmin && !isManager) {
@@ -1401,33 +1464,70 @@ Future<void> markOrderReceived(String id) async {
     rethrow;
   }
 }
-  Future<void> deleteOrder(String id) async {
-    try {
-      await FirebaseFirestore.instance.collection('orders').doc(id).delete();
-      _orders.removeWhere((o) => o['id'] == id);
-      notifyListeners();
-    } catch (e) {
-      log('Error deleting order: $e', name: 'Orders');
-    }
+ Future<void> deleteOrder(String id) async {
+  if (!(isAdmin || isManager)) {
+    throw 'Only Admin/Manager can delete orders.';
   }
+  await FirebaseFirestore.instance.collection('orders').doc(id).delete();
+  _orders.removeWhere((o) => o['id'] == id);
+  notifyListeners();
+}
 
-  Future<void> editOrder(Map<String, dynamic> updatedOrder) async {
-    try {
-      final orderId = updatedOrder['id'].toString();
-      await FirebaseFirestore.instance
-          .collection('orders')
-          .doc(orderId)
-          .update(updatedOrder);
+  bool _isMyOrder(Map<String, dynamic> order) {
+  final myUid = (loggedInUser?['uid'] ?? '').toString();
+  return (order['createdByUid'] ?? '') == myUid;
+}
 
-      final index = _orders.indexWhere((o) => o['id'] == updatedOrder['id']);
-      if (index != -1) {
-        _orders[index] = updatedOrder;
-        notifyListeners();
+bool _withinEditWindow(dynamic createdAt, {int minutes = 10}) {
+  DateTime? c;
+  if (createdAt is Timestamp) c = createdAt.toDate();
+  else if (createdAt is DateTime) c = createdAt;
+  else if (createdAt is String) c = DateTime.tryParse(createdAt);
+  if (c == null) return false;
+  return DateTime.now().difference(c).inMinutes <= minutes;
+}
+
+Future<void> editOrder(Map<String, dynamic> updatedOrder) async {
+  try {
+    final orderId = updatedOrder['id']?.toString();
+    if (orderId == null || orderId.isEmpty) {
+      throw 'editOrder: missing order id';
+    }
+
+    // load existing to validate
+    final snap = await firestore.collection('orders').doc(orderId).get();
+    if (!snap.exists) throw 'Order not found';
+    final old = snap.data()!;
+
+    // Role rules
+    if (!(isAdmin || isManager)) {
+      // employee restrictions
+      if (!_isMyOrder(old)) {
+        throw 'You can only edit your own order.';
       }
-    } catch (e) {
-      log('Error updating order: $e', name: 'Orders');
+      if (!_withinEditWindow(old['createdAt'])) {
+        throw 'Editing window (10 min) is over.';
+      }
     }
+
+    final payload = {...updatedOrder}..remove('id');
+    payload['updatedAt'] = FieldValue.serverTimestamp();
+
+    // NEVER touch createdAt on update
+    payload.remove('createdAt');
+
+    await firestore.collection('orders').doc(orderId).update(payload);
+
+    final idx = _orders.indexWhere((o) => o['id'] == orderId);
+    if (idx != -1) {
+      _orders[idx] = {..._orders[idx], ...updatedOrder};
+    }
+    notifyListeners();
+  } catch (e) {
+    log('Error updating order: $e', name: 'Orders');
+    rethrow;
   }
+}
 
   bool canEditOrder(Map<String, dynamic> order) {
     final raw = order['createdAt'];
@@ -1485,27 +1585,34 @@ Future<void> deleteWholesalerByName(String name) async {
     }
   }
 
-  Future<void> addSale(Map<String, dynamic> saleData) async {
-    final ts = Timestamp.now();
-    saleData['createdAt'] = ts;
+ Future<void> addSale(Map<String, dynamic> saleData) async {
+  final ts = Timestamp.now();
+  final shop = (saleData['shop'] ?? saleData['shopName'] ?? '').toString();
 
-    if (saleData.isNotEmpty && saleData['total'] != null) {
-      try {
-        final docRef =
-            await FirebaseFirestore.instance.collection('sales').add(saleData);
-
-        saleData['id'] = docRef.id;
-
-        _sales.add({
-          ...saleData,
-          'createdAt': ts.toDate(),
-        });
-        notifyListeners();
-      } catch (e) {
-        log('Error adding sale: $e');
-      }
-    }
+  if (shop.isEmpty) {
+    throw 'Shop is required for sale';
   }
+
+  final data = {
+    ...saleData,
+    'shop'     : shop,
+    'shopName' : shop,                 // keep both for compatibility
+    'createdAt': ts,
+  };
+
+  try {
+    final docRef = await FirebaseFirestore.instance.collection('sales').add(data);
+    _sales.add({
+      ...data,
+      'id': docRef.id,
+      'createdAt': ts.toDate(),
+    });
+    notifyListeners();
+  } catch (e) {
+    log('Error adding sale: $e');
+  }
+}
+
 
   List<Map<String, dynamic>> get salesEditRequests =>
       _editRequests.where((r) => r['type'] == 'sale').toList();
@@ -1980,22 +2087,26 @@ Future<void> placeOrUpdateOrder({
       .where('wholesalerName', isEqualTo: wholesalerName)
       .limit(1).get();
 
-  final payload = {
-    'dayKey': dayKey,
-    'shopName': shopName,
-    'wholesalerName': wholesalerName,
-    'amount': amount,
-    'status': 'Pending',
-    'updatedAt': FieldValue.serverTimestamp(),
-    'createdAt': FieldValue.serverTimestamp(),
-    'createdByUid': _loggedInUser?['uid'],
-    'createdByName': _loggedInUser?['name'] ?? _loggedInUser?['email'],
-  };
-
   if (q.docs.isEmpty) {
-    await firestore.collection('orders').add(payload);
+    // NEW document → createdAt + updatedAt dono set
+    await firestore.collection('orders').add({
+      'dayKey'        : dayKey,
+      'shopName'      : shopName,
+      'wholesalerName': wholesalerName,
+      'amount'        : amount,
+      'status'        : 'Pending',
+      'createdAt'     : FieldValue.serverTimestamp(),
+      'updatedAt'     : FieldValue.serverTimestamp(),
+      'createdByUid'  : _loggedInUser?['uid'],
+      'createdByName' : _loggedInUser?['name'] ?? _loggedInUser?['email'],
+    });
   } else {
-    await firestore.collection('orders').doc(q.docs.first.id).update(payload);
+    // UPDATE → sirf updatedAt change karo; createdAt ko na chhedo
+    await firestore.collection('orders').doc(q.docs.first.id).update({
+      'amount'   : amount,
+      'status'   : 'Pending',
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
   }
 }
 
@@ -2005,6 +2116,9 @@ Future<void> deleteOrderForCell({
   required String shopName,
   required String wholesalerName,
 }) async {
+  if (!(isAdmin || isManager)) {
+    throw 'Only Admin/Manager can delete orders.';
+  }
   final dayKey = DateFormat('yyyy-MM-dd').format(day);
   final q = await firestore.collection('orders')
       .where('dayKey', isEqualTo: dayKey)
@@ -2015,6 +2129,7 @@ Future<void> deleteOrderForCell({
     await firestore.collection('orders').doc(q.docs.first.id).delete();
   }
 }
+
 
 
   // 🔁 REPLACE this whole function in AppDataProvider
@@ -2179,10 +2294,15 @@ Future<void> recordWholesalerPayment({
 }
 
   // ---------- Status update ----------
-  Future<void> updateOrderStatus(String orderId, String newStatus) async {
-  // Optional central validation
+  
+Future<void> updateOrderStatus(String orderId, String newStatus) async {
+  // Forward sirf admin/manager
   if (newStatus == 'Forwarded' && !(isAdmin || isManager)) {
     throw 'Only Admin/Manager can forward orders.';
+  }
+  // Delete sirf admin/manager
+  if (newStatus == 'Deleted' && !(isAdmin || isManager)) {
+    throw 'Only Admin/Manager can delete orders.';
   }
 
   if (newStatus == 'Deleted') {
@@ -2190,14 +2310,16 @@ Future<void> recordWholesalerPayment({
     _orders.removeWhere((o) => o['id'] == orderId);
   } else {
     await firestore.collection('orders').doc(orderId).update({
-      'status': newStatus,
+      'status'   : newStatus,
       'updatedAt': FieldValue.serverTimestamp(),
     });
     final i = _orders.indexWhere((o) => o['id'] == orderId);
-    if (i != -1) _orders[i]['status'] = newStatus;
+    if (i != -1) {
+      _orders[i] = {..._orders[i], 'status': newStatus};
+    }
   }
 
-  // keep local + remote in sync
+  // list ko fresh rakhne ke liye
   await fetchOrders();
   notifyListeners();
 }
@@ -2468,16 +2590,18 @@ Future<void> recordWholesalerPayment({
       notifyListeners();
     });
 
-    firestore.collection('orders').snapshots().listen((snapshot) {
-      _orders
-        ..clear()
-        ..addAll(snapshot.docs.map((d) {
-          final data = d.data();
-          final createdAt = _toDate(data['createdAt']);
-          return {'id': d.id, ...data, 'createdAt': createdAt};
-        }));
-      notifyListeners();
-    });
+   buildOrdersQuery(
+  restrictToMyOrdersIfEmployee: true, // employee ⇒ last 2; admin/manager ⇒ all
+).snapshots().listen((snapshot) {
+  _orders
+    ..clear()
+    ..addAll(snapshot.docs.map((d) {
+      final data = d.data();
+      final createdAt = _toDate(data['createdAt']);
+      return {'id': d.id, ...data, 'createdAt': createdAt};
+    }));
+  notifyListeners();
+});
 
     firestore.collection('sales').snapshots().listen((snapshot) {
       _sales

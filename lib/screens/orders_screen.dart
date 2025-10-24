@@ -1,11 +1,11 @@
-// lib/screens/orders_screen.dart
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../providers/app_data_provider.dart';
-import 'add_order_screen.dart';
+import 'add_order_screen.dart';          // Receive form (your current file)
+import 'place_order_screen.dart';        // NEW: simple “place order” form
 
 class OrdersScreen extends StatefulWidget {
   const OrdersScreen({
@@ -217,7 +217,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
     );
   }
 
-  // Add Order flow (per-shop per day unique)
+  // FAB → Place Order (new screen)
   Future<void> _startAddOrder(BuildContext context) async {
     final app = context.read<AppDataProvider>();
 
@@ -267,25 +267,20 @@ class _OrdersScreenState extends State<OrdersScreen> {
     );
     if (!mounted || chosen == null || chosen.trim().isEmpty) return;
 
-    // UI guard (shop+day unique)
-    final todayKey = DateFormat('yyyy-MM-dd').format(DateTime.now());
-    final already = app.orders.any((o) =>
-        (o['shopName'] ?? o['shop']) == shopName &&
-        (o['dayKey'] ?? '') == todayKey);
-    if (already) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Aaj is shop ka order already mojood hai.')),
-      );
-      return;
-    }
+    // (Optional) Keep your unique-per-day guard here if you still want it:
+    // final todayKey = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    // final already = app.orders.any((o) =>
+    //     (o['shopName'] ?? o['shop']) == shopName &&
+    //     (o['dayKey'] ?? '') == todayKey);
+    // if (already) { ...return; }
 
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => AddOrderScreen(
+        builder: (_) => PlaceOrderScreen(
           shopName: shopName,
           wholesalerName: chosen.trim(),
+          // (optionally pass employeeName here)
         ),
       ),
     );
@@ -364,7 +359,27 @@ class _OrdersScreenState extends State<OrdersScreen> {
         .toList();
 
     // filtered list for cards
-    final orders = _applyFilter(allOrders);
+    var orders = _applyFilter(allOrders);
+
+    // EMPLOYEE: show only last two own orders (any status)
+    if (!isManagerOrAdmin) {
+      final myUid = (app.loggedInUser?['uid'] ?? '').toString();
+      orders = orders
+          .where((o) => (o['createdByUid'] ?? '') == myUid)
+          .toList()
+        ..sort((a, b) {
+          final ad = a['createdAt'] is DateTime
+              ? a['createdAt'] as DateTime
+              : ((a['createdAt'] as Timestamp?)?.toDate() ?? DateTime(2000));
+          final bd = b['createdAt'] is DateTime
+              ? b['createdAt'] as DateTime
+              : ((b['createdAt'] as Timestamp?)?.toDate() ?? DateTime(2000));
+          return bd.compareTo(ad);
+        });
+      if (orders.length > 2) {
+        orders = orders.sublist(0, 2);
+      }
+    }
 
     // pending counts (Ordered + Forwarded)
     final Map<String, int> pendingCounts = {};
@@ -446,16 +461,25 @@ class _OrdersScreenState extends State<OrdersScreen> {
                             content: Text('Order forwarded.')),
                       );
                     }),
-                    onReceived: (id) => _safeRun(() async {
-                      await context
-                          .read<AppDataProvider>()
-                          .markOrderReceived(id);
-                      if (!mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                            content: Text('Order received.')),
+                    onReceived: (id) async {
+                      // 👉 open Receive form instead of instant mark
+                      final app = context.read<AppDataProvider>();
+                      final order = app.orders.firstWhere((o) => o['id'] == id);
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => AddOrderScreen(
+                            orderId: id,
+                            shopName:
+                                (order['shopName'] ?? order['shop'] ?? '').toString(),
+                            wholesalerName: (order['wholesalerName'] ??
+                                    order['wholesaler'] ??
+                                    '')
+                                .toString(),
+                          ),
+                        ),
                       );
-                    }),
+                    },
                     onDelete: (id) => _safeRun(() async {
                       await context
                           .read<AppDataProvider>()
@@ -515,9 +539,24 @@ class _OrdersScreenState extends State<OrdersScreen> {
                   ? null
                   : () async {
                       Navigator.pop(context);
-                      await _safeRun(() => context
-                          .read<AppDataProvider>()
-                          .markOrderReceived(id));
+                      // 👉 open Receive form
+                      final app = context.read<AppDataProvider>();
+                      final order =
+                          app.orders.firstWhere((o) => o['id'] == id);
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => AddOrderScreen(
+                            orderId: id,
+                            shopName:
+                                (order['shopName'] ?? order['shop'] ?? '').toString(),
+                            wholesalerName: (order['wholesalerName'] ??
+                                    order['wholesaler'] ??
+                                    '')
+                                .toString(),
+                          ),
+                        ),
+                      );
                     },
             ),
             ListTile(
@@ -893,16 +932,37 @@ class _TableView extends StatelessWidget {
     // remove any Deleted if present locally
     itemsAll.removeWhere((m) => (m['status'] ?? '') == 'Deleted');
 
-    // sort by createdAt desc
-    itemsAll.sort((a, b) {
-      final ad = a['createdAt'] is DateTime
-          ? a['createdAt'] as DateTime
-          : ((a['createdAt'] as Timestamp?)?.toDate() ?? DateTime(2000));
-      final bd = b['createdAt'] is DateTime
-          ? b['createdAt'] as DateTime
-          : ((b['createdAt'] as Timestamp?)?.toDate() ?? DateTime(2000));
-      return bd.compareTo(ad);
-    });
+    // EMPLOYEE: limit to own last two only
+    final role = (app.loggedInUser?['role'] ?? '').toString().toLowerCase();
+    if (role == 'employee') {
+      final myUid = (app.loggedInUser?['uid'] ?? '').toString();
+      itemsAll = itemsAll
+          .where((m) => (m['createdByUid'] ?? '') == myUid)
+          .toList()
+        ..sort((a, b) {
+          final ad = a['createdAt'] is DateTime
+              ? a['createdAt'] as DateTime
+              : ((a['createdAt'] as Timestamp?)?.toDate() ?? DateTime(2000));
+          final bd = b['createdAt'] is DateTime
+              ? b['createdAt'] as DateTime
+              : ((b['createdAt'] as Timestamp?)?.toDate() ?? DateTime(2000));
+          return bd.compareTo(ad);
+        });
+      if (itemsAll.length > 2) {
+        itemsAll = itemsAll.sublist(0, 2);
+      }
+    } else {
+      // sort for admin/manager (desc)
+      itemsAll.sort((a, b) {
+        final ad = a['createdAt'] is DateTime
+            ? a['createdAt'] as DateTime
+            : ((a['createdAt'] as Timestamp?)?.toDate() ?? DateTime(2000));
+        final bd = b['createdAt'] is DateTime
+            ? b['createdAt'] as DateTime
+            : ((b['createdAt'] as Timestamp?)?.toDate() ?? DateTime(2000));
+        return bd.compareTo(ad);
+      });
+    }
 
     // group by wholesaler
     final Map<String, List<Map<String, dynamic>>> byWh = {};
