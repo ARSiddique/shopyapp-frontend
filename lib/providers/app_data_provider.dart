@@ -2129,32 +2129,54 @@ Future<void> recordWholesalerPayment({
 
 
   // ---------- Query builder for Orders ----------
-  Query<Map<String, dynamic>> buildOrdersQuery({
-    String? shopName, // null => all
-    String? status, // null => all
-    String? wholesalerName, // null => all
-    DateTime? from, // inclusive
-    DateTime? to, // exclusive
-  }) {
-    var q =
-        firestore.collection('orders').orderBy('createdAt', descending: true);
-    if (shopName != null && shopName.isNotEmpty && shopName != 'All') {
-      q = q.where('shopName', isEqualTo: shopName);
-    }
+ Query<Map<String, dynamic>> buildOrdersQuery({
+  String? shopName,        // null/'All' => all shops (ignored for employee)
+  String? status,          // null/'All' => all statuses
+  String? wholesalerName,  // optional exact
+  DateTime? from,          // inclusive
+  DateTime? to,            // exclusive
+  int? limit,              // optional explicit limit (admin/manager case)
+  bool restrictToMyOrdersIfEmployee = true, // default ON
+}) {
+  // Base: newest first
+  var q = firestore.collection('orders').orderBy('createdAt', descending: true);
+
+  // Employee → ALWAYS see only own orders (createdByUid) and limit 2 (unless override)
+  if (isEmployee && restrictToMyOrdersIfEmployee) {
+    final uid = (loggedInUser?['uid'] ?? '').toString();
+    q = q.where('createdByUid', isEqualTo: uid);
+
+    // status filter allowed (employee may choose), but not required
     if (status != null && status.isNotEmpty && status != 'All') {
       q = q.where('status', isEqualTo: status);
     }
-    if (wholesalerName != null && wholesalerName.isNotEmpty) {
-      q = q.where('wholesalerName', isEqualTo: wholesalerName);
-    }
-    if (from != null) {
-      q = q.where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(from));
-    }
-    if (to != null) {
-      q = q.where('createdAt', isLessThan: Timestamp.fromDate(to));
-    }
-    return q;
+
+    // time/shop/wholesaler filters are NOT applied by default for employee
+    // because we only want last-two "own" orders
+    return (q.limit(2)); // <-- force last two
   }
+
+  // Admin/Manager → full power filters
+  if (shopName != null && shopName.isNotEmpty && shopName != 'All') {
+    q = q.where('shopName', isEqualTo: shopName);
+  }
+  if (status != null && status.isNotEmpty && status != 'All') {
+    q = q.where('status', isEqualTo: status);
+  }
+  if (wholesalerName != null && wholesalerName.isNotEmpty) {
+    q = q.where('wholesalerName', isEqualTo: wholesalerName);
+  }
+  if (from != null) {
+    q = q.where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(from));
+  }
+  if (to != null) {
+    q = q.where('createdAt', isLessThan: Timestamp.fromDate(to));
+  }
+  if (limit != null && limit > 0) {
+    q = q.limit(limit);
+  }
+  return q;
+}
 
   // ---------- Status update ----------
   Future<void> updateOrderStatus(String orderId, String newStatus) async {
@@ -2203,25 +2225,22 @@ Future<void> recordWholesalerPayment({
 
  Future<void> fetchOrders() async {
   try {
-    Query<Map<String, dynamic>> q =
-        firestore.collection('orders').orderBy('createdAt', descending: true);
+    Query<Map<String, dynamic>> q;
 
     if (isEmployee) {
-      final assigned = List<String>.from(
-          (loggedInUser?['assignedShops'] ?? const [])).where((e) => e.toString().trim().isNotEmpty).toList();
-
-      final from = DateTime.now().subtract(const Duration(days: 60));
-      q = q
-          .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(from));
-
-      // Agar employee ke paas selectedShop set hai to wohi; warna assigned list (agar 10+ ho to client-side filter)
-      final sel = _selectedShopName;
-      if ((sel ?? '').isNotEmpty) {
-        q = q.where('shopName', isEqualTo: sel);
-      } else if (assigned.length == 1) {
-        q = q.where('shopName', isEqualTo: assigned.first);
-      }
-      // multiple assigned shops ke liye Firestore me 'whereIn' max 10 — agar >10 ho to client filter niche ho jayega
+      // ✅ only my last two orders, regardless of status
+      q = buildOrdersQuery(
+        restrictToMyOrdersIfEmployee: true, // force my last-2
+      );
+    } else {
+      // Admin/Manager → show all (no status filter by default)
+      q = buildOrdersQuery(
+        status: null,   // show all statuses
+        shopName: null, // all shops
+        from: null,
+        to: null,
+        limit: null,
+      );
     }
 
     final snap = await q.get();
@@ -2234,22 +2253,12 @@ Future<void> recordWholesalerPayment({
         return {'id': d.id, ...data, 'createdAt': createdAt};
       }));
 
-    // client-side extra filter (employee + multiple assigned shops > 1)
-    if (isEmployee) {
-      final assigned = (loggedInUser?['assignedShops'] ?? const [])
-          .map<String>((e) => e.toString())
-          .toSet();
-      final from = DateTime.now().subtract(const Duration(days: 60));
-      _orders.removeWhere((o) =>
-          !assigned.contains(o['shopName']) ||
-          (o['createdAt'] is DateTime && (o['createdAt'] as DateTime).isBefore(from)));
-    }
-
     notifyListeners();
   } catch (e) {
     log('Error fetching orders: $e', name: 'Orders');
   }
 }
+
 
   Future<void> fetchSales() async {
   try {

@@ -26,13 +26,12 @@ enum _OrdersView { list, table }
 
 class _OrdersScreenState extends State<OrdersScreen> {
   bool _busy = false;
-  late String _statusFilter = widget.initialStatusFilter;
+  late String _statusFilter;
   String? _wholesalerFilter;
   final _dateFmt = DateFormat('dd MMM, hh:mm a');
   bool _didPromptShop = false;
 
   _OrdersView _view = _OrdersView.table; // default table
-  DateTime _tableDate = DateTime.now();
 
   // ---------- helpers ----------
   String _uiStatusOf(dynamic raw) {
@@ -81,11 +80,14 @@ class _OrdersScreenState extends State<OrdersScreen> {
   void initState() {
     super.initState();
     _wholesalerFilter = widget.focusWholesaler;
-    // normalize initial for Pending/Placed → Ordered
-    _statusFilter =
-        _uiStatusOf(widget.initialStatusFilter) == 'Ordered'
-            ? 'Ordered'
-            : widget.initialStatusFilter;
+
+    // ✅ Only map Pending/Placed → Ordered. Keep 'All' as is.
+    if (widget.initialStatusFilter == 'Pending' ||
+        widget.initialStatusFilter == 'Placed') {
+      _statusFilter = 'Ordered';
+    } else {
+      _statusFilter = widget.initialStatusFilter;
+    }
   }
 
   @override
@@ -100,7 +102,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
     });
   }
 
-  // ---------- prompt/select shop ----------
+  // ---------- prompt/select shop (admin/manager only) ----------
   Future<void> _promptShopEachVisit() async {
     final app = context.read<AppDataProvider>();
     final role = (app.loggedInUser?['role'] ?? '').toString().toLowerCase();
@@ -418,18 +420,8 @@ class _OrdersScreenState extends State<OrdersScreen> {
             ? const Center(child: CircularProgressIndicator())
             : (_view == _OrdersView.table
                 ? _TableView(
-                    date: _tableDate,
-                    statusFilter:
-                        _statusFilter, // filter applied in table
-                    onPickDate: () async {
-                      final d = await showDatePicker(
-                        context: context,
-                        firstDate: DateTime(2023, 1, 1),
-                        lastDate: DateTime(2100),
-                        initialDate: _tableDate,
-                      );
-                      if (d != null) setState(() => _tableDate = d);
-                    },
+                    statusFilter: _statusFilter,
+                    wholesalerFilter: _wholesalerFilter,
                     onOpenActions: (row) => _openOrderActionsSheet(
                       context: context,
                       row: row,
@@ -847,52 +839,18 @@ class _StatusChip extends StatelessWidget {
   }
 }
 
-//// ===================== TABLE VIEW (horizontal scroll + filter) =====================
+//// ===================== TABLE VIEW (ALL DATES) =====================
 
-class _TableView extends StatefulWidget {
+class _TableView extends StatelessWidget {
   const _TableView({
-    required this.date,
-    required this.onPickDate,
-    required this.onOpenActions,
     required this.statusFilter,
+    required this.onOpenActions,
+    this.wholesalerFilter,
   });
 
-  final DateTime date;
-  final Future<void> Function() onPickDate;
-  final void Function(Map<String, dynamic> row) onOpenActions;
   final String statusFilter;
-
-  @override
-  State<_TableView> createState() => _TableViewState();
-}
-
-class _TableViewState extends State<_TableView> {
-  Future<List<Map<String, dynamic>>>? _future;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  @override
-  void didUpdateWidget(covariant _TableView oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.date != widget.date ||
-        oldWidget.statusFilter != widget.statusFilter) {
-      _load();
-    }
-  }
-
-  void _load() {
-    final app = context.read<AppDataProvider>();
-    // shopName 'All' pass kar rahe hain; provider null/'All' ko all-shops treat kare
-    _future = app.fetchOrdersForDate(
-      shopName: 'All',
-      date: widget.date,
-    );
-    setState(() {});
-  }
+  final String? wholesalerFilter;
+  final void Function(Map<String, dynamic> row) onOpenActions;
 
   String _uiStatusOf(dynamic raw) {
     final s = (raw ?? 'Pending').toString();
@@ -909,197 +867,184 @@ class _TableViewState extends State<_TableView> {
 
   @override
   Widget build(BuildContext context) {
-    final dateTitle = DateFormat('dd MMM yyyy').format(widget.date);
+    final app = context.watch<AppDataProvider>();
+    final dateFmt = DateFormat('dd MMM yyyy');
 
-    return FutureBuilder<List<Map<String, dynamic>>>(
-      future: _future,
-      builder: (ctx, snap) {
-        final itemsAll = (snap.data ?? const [])
-            .map((m) => {...m, 'uiStatus': _uiStatusOf(m['status'])})
-            .toList();
+    // Take all orders from provider (admin/manager => all; employee => scoped)
+    List<Map<String, dynamic>> itemsAll = app.orders
+        .map((m) => {...m, 'uiStatus': _uiStatusOf(m['status'])})
+        .toList();
 
-        // same filter as list view
-        final items = widget.statusFilter == 'All'
-            ? itemsAll
-            : itemsAll
-                .where((m) =>
-                    (m['uiStatus'] as String) == widget.statusFilter)
-                .toList();
+    // filter by status if needed
+    if (statusFilter != 'All') {
+      itemsAll = itemsAll
+          .where((m) => (m['uiStatus'] as String) == statusFilter)
+          .toList();
+    }
+    // filter by wholesaler if passed
+    if ((wholesalerFilter ?? '').isNotEmpty) {
+      final target = wholesalerFilter!.toLowerCase();
+      itemsAll = itemsAll.where((m) {
+        final w = (m['wholesalerName'] ?? m['wholesaler'] ?? '').toString();
+        return w.toLowerCase() == target;
+      }).toList();
+    }
 
-        // group by wholesaler
-        final Map<String, List<Map<String, dynamic>>> byWh = {};
-        for (final m in items) {
-          final w = (m['wholesalerName'] ?? '').toString();
-          byWh.putIfAbsent(w, () => []).add(m);
-        }
+    // remove any Deleted if present locally
+    itemsAll.removeWhere((m) => (m['status'] ?? '') == 'Deleted');
 
-        // unique shops (sorted)
-        final List<String> shops = {
-          for (final m in items)
-            (m['shopName'] ?? m['shop'] ?? '').toString().trim()
-        }.where((s) => s.isNotEmpty).toList()
-          ..sort();
+    // sort by createdAt desc
+    itemsAll.sort((a, b) {
+      final ad = a['createdAt'] is DateTime
+          ? a['createdAt'] as DateTime
+          : ((a['createdAt'] as Timestamp?)?.toDate() ?? DateTime(2000));
+      final bd = b['createdAt'] is DateTime
+          ? b['createdAt'] as DateTime
+          : ((b['createdAt'] as Timestamp?)?.toDate() ?? DateTime(2000));
+      return bd.compareTo(ad);
+    });
 
-        return ListView(
-          padding: const EdgeInsets.all(12),
-          children: [
-            Row(
-              children: [
-                Text(
-                  dateTitle,
-                  style: Theme.of(context)
-                      .textTheme
-                      .titleMedium
-                      ?.copyWith(color: Colors.white),
-                ),
-                const SizedBox(width: 8),
-                OutlinedButton.icon(
-                  onPressed: widget.onPickDate,
-                  icon: const Icon(Icons.date_range),
-                  label: const Text('Change'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white70,
-                    side: const BorderSide(color: Colors.white24),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                ),
-              ],
+    // group by wholesaler
+    final Map<String, List<Map<String, dynamic>>> byWh = {};
+    for (final m in itemsAll) {
+      final w = (m['wholesalerName'] ?? m['wholesaler'] ?? '').toString();
+      byWh.putIfAbsent(w, () => []).add(m);
+    }
+
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        if (itemsAll.isEmpty)
+          const Padding(
+            padding: EdgeInsets.only(top: 40),
+            child: Center(
+              child: Text('No orders found',
+                  style: TextStyle(color: Colors.white70)),
             ),
-            const SizedBox(height: 12),
-            if (snap.connectionState == ConnectionState.waiting)
-              const Center(child: CircularProgressIndicator())
-            else if (items.isEmpty)
-              const Padding(
-                padding: EdgeInsets.only(top: 40),
-                child: Center(
-                  child: Text('No orders for this date',
-                      style: TextStyle(color: Colors.white70)),
-                ),
-              )
-            else
-              ...byWh.entries.map((entry) {
-                final wholesalerName = entry.key;
-                final list = entry.value;
+          )
+        else
+          ...byWh.entries.map((entry) {
+            final wholesalerName = entry.key.isEmpty ? 'Wholesaler' : entry.key;
+            final list = entry.value;
 
-                // shop -> row map
-                final Map<String, Map<String, dynamic>> rowMap = {
-                  for (final m in list)
-                    (m['shopName'] ?? m['shop'] ?? '').toString(): m
-                };
-
-                return Card(
-                  color: const Color(0xFF121A26),
-                  margin: const EdgeInsets.only(bottom: 16),
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // top: wholesaler name
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF1C2535),
-                            borderRadius: BorderRadius.circular(8),
+            return Card(
+              color: const Color(0xFF121A26),
+              margin: const EdgeInsets.only(bottom: 16),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // top: wholesaler name
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1C2535),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Center(
+                        child: Text(
+                          wholesalerName,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 16,
+                            color: Colors.white,
                           ),
-                          child: Center(
-                            child: Text(
-                              wholesalerName.isEmpty
-                                  ? 'Wholesaler'
-                                  : wholesalerName,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                                fontSize: 16,
-                                color: Colors.white,
-                              ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+
+                    // table (Date + Shop + ticks + Actions)
+                    LayoutBuilder(builder: (ctx, cs) {
+                      final minTableWidth = 900.0;
+                      final tableWidth = cs.maxWidth < minTableWidth
+                          ? minTableWidth
+                          : cs.maxWidth;
+
+                      return SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(minWidth: tableWidth),
+                          child: Theme(
+                            data: Theme.of(context).copyWith(
+                              dividerColor: Colors.white12,
+                            ),
+                            child: DataTable(
+                              columnSpacing: 24,
+                              headingTextStyle: const TextStyle(
+                                  color: Colors.white70,
+                                  fontWeight: FontWeight.w700),
+                              dataTextStyle:
+                                  const TextStyle(color: Colors.white),
+                              columns: const [
+                                DataColumn(label: Text('Date')),
+                                DataColumn(label: Text('Shop')),
+                                DataColumn(label: Text('Amount')),
+                                DataColumn(label: Text('Ordered')),
+                                DataColumn(label: Text('Forwarded')),
+                                DataColumn(label: Text('Received')),
+                                DataColumn(label: Text('Actions')),
+                              ],
+                              rows: list.map((m) {
+                                final dtRaw = m['createdAt'];
+                                final dt = dtRaw is DateTime
+                                    ? dtRaw
+                                    : (dtRaw is Timestamp
+                                        ? dtRaw.toDate()
+                                        : null);
+                                final dateStr =
+                                    dt != null ? dateFmt.format(dt) : '-';
+
+                                final shop =
+                                    (m['shopName'] ?? m['shop'] ?? '')
+                                        .toString();
+
+                                final amount = (m['amount'] is num)
+                                    ? (m['amount'] as num).toDouble()
+                                    : double.tryParse('${m['amount'] ?? 0}') ??
+                                        0.0;
+
+                                final uiStatus =
+                                    (m['uiStatus'] ?? 'Ordered').toString();
+
+                                final isOrdered = uiStatus == 'Ordered';
+                                final isForwarded = uiStatus == 'Forwarded';
+                                final isReceived = uiStatus == 'Received';
+
+                                return DataRow(
+                                  cells: [
+                                    DataCell(Text(dateStr)),
+                                    DataCell(Text(shop)),
+                                    DataCell(Text(amount.toStringAsFixed(2))),
+                                    DataCell(Center(child: _tick(isOrdered))),
+                                    DataCell(Center(child: _tick(isForwarded))),
+                                    DataCell(Center(child: _tick(isReceived))),
+                                    DataCell(
+                                      IconButton(
+                                        tooltip: 'Actions',
+                                        onPressed: () => onOpenActions(m),
+                                        icon: const Icon(
+                                          Icons.more_horiz,
+                                          color: Colors.white70,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              }).toList(),
                             ),
                           ),
                         ),
-                        const SizedBox(height: 8),
-
-                        // table: horizontally scrollable (so columns kabhi cut na hon)
-                        LayoutBuilder(builder: (ctx, cs) {
-                          final minTableWidth = 780.0; // 5 columns comfortably
-                          final tableWidth = cs.maxWidth < minTableWidth
-                              ? minTableWidth
-                              : cs.maxWidth;
-
-                          return SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            child: ConstrainedBox(
-                              constraints:
-                                  BoxConstraints(minWidth: tableWidth),
-                              child: Theme(
-                                data: Theme.of(context).copyWith(
-                                  dividerColor: Colors.white12,
-                                ),
-                                child: DataTable(
-                                  columnSpacing: 28,
-                                  headingTextStyle: const TextStyle(
-                                      color: Colors.white70,
-                                      fontWeight: FontWeight.w700),
-                                  dataTextStyle: const TextStyle(
-                                      color: Colors.white),
-                                  columns: const [
-                                    DataColumn(label: Text('Shop')),
-                                    DataColumn(label: Text('Ordered')),
-                                    DataColumn(label: Text('Forwarded')),
-                                    DataColumn(label: Text('Received')),
-                                    DataColumn(label: Text('Actions')),
-                                  ],
-                                  rows: shops.map((shopName) {
-                                    final m = rowMap[shopName];
-                                    final uiStatus = m == null
-                                        ? '—'
-                                        : _uiStatusOf(m['status']);
-
-                                    final isOrdered = uiStatus == 'Ordered';
-                                    final isForwarded =
-                                        uiStatus == 'Forwarded';
-                                    final isReceived =
-                                        uiStatus == 'Received';
-
-                                    return DataRow(
-                                      cells: [
-                                        DataCell(Text(shopName)),
-                                        DataCell(Center(
-                                            child: _tick(isOrdered))),
-                                        DataCell(Center(
-                                            child: _tick(isForwarded))),
-                                        DataCell(Center(
-                                            child: _tick(isReceived))),
-                                        DataCell(
-                                          IconButton(
-                                            tooltip: 'Actions',
-                                            onPressed: m == null
-                                                ? null
-                                                : () => widget
-                                                    .onOpenActions(m),
-                                            icon: const Icon(
-                                              Icons.more_horiz,
-                                              color: Colors.white70,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    );
-                                  }).toList(),
-                                ),
-                              ),
-                            ),
-                          );
-                        }),
-                      ],
-                    ),
-                  ),
-                );
-              }),
-          ],
-        );
-      },
+                      );
+                    }),
+                  ],
+                ),
+              ),
+            );
+          }),
+      ],
     );
   }
 }
