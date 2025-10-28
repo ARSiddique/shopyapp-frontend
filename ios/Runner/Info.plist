@@ -28,6 +28,7 @@
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
 	<string>Main</string>
+
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
@@ -41,9 +42,18 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+
+	<!-- Privacy usage descriptions required by Apple -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Shopy App needs access to your Photos so you can select images for shops, products or receipts.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Shopy App may save images or exported files to your Photos when you choose to.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Shopy App uses the camera to capture photos for shops, products or receipts.</string>
 </dict>
 </plist>
