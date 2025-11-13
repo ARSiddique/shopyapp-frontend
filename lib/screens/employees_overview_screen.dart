@@ -232,21 +232,23 @@ class _EmployeesOverviewScreenState extends State<EmployeesOverviewScreen> {
                             subtitle: Text(phone.isEmpty ? '—' : phone),
                           ),
                           const Divider(height: 0),
-                          ListTile(
-                            leading: const Icon(Icons.lock_outline),
-                            title: const Text('Password / Login Code'),
-                            subtitle: Text(
-                              storedPassword.isEmpty ? '—' : '•' * storedPassword.length,
-                              style: const TextStyle(letterSpacing: 1.2),
-                            ),
-                            trailing: storedPassword.isEmpty
-                                ? null
-                                : IconButton(
-                                    tooltip: showPwd ? 'Hide' : 'Show',
-                                    icon: Icon(showPwd ? Icons.visibility_off : Icons.visibility),
-                                    onPressed: () => setSheetState(() => showPwd = !showPwd),
-                                  ),
-                          ),
+                         ListTile(
+  leading: const Icon(Icons.lock_outline),
+  title: const Text('Password / Login Code'),
+  subtitle: Text(
+    storedPassword.isEmpty
+        ? '—'
+        : (showPwd ? storedPassword : '•' * storedPassword.length),
+    style: const TextStyle(letterSpacing: 1.2),
+  ),
+  trailing: storedPassword.isEmpty
+      ? null
+      : IconButton(
+          tooltip: showPwd ? 'Hide' : 'Show',
+          icon: Icon(showPwd ? Icons.visibility_off : Icons.visibility),
+          onPressed: () => setSheetState(() => showPwd = !showPwd),
+        ),
+),
                         ],
                       ),
                     ),

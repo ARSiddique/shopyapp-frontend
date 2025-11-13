@@ -115,148 +115,137 @@ class _AddSaleScreenState extends State<AddSaleScreen> {
     }
 
     final hasMultipleAssigned = _isEmployee && shopOptions.length > 1;
-    final shouldShowBackToSelection = hasMultipleAssigned;
     final appBarTitleShop = _selectedShop ?? '—';
     final isEditingSource = widget.existingSale != null;
 
     final total = _parse(_cashC.text) + _parse(_cardC.text) + _parse(_otherC.text);
 
-    // Handle back behavior for multi-shop employees
-    final blockBackForSingleShopEmployee = _isEmployee && !hasMultipleAssigned;
-    final interceptBackToSelection = shouldShowBackToSelection;
-    final canPop = !(blockBackForSingleShopEmployee || interceptBackToSelection);
+    final navigator = Navigator.of(context);
 
-    return PopScope(
-      canPop: canPop,
-      onPopInvokedWithResult: (didPop, _) {
-        if (didPop) return;
-        if (interceptBackToSelection) {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => const ShopSelectionScreen()),
-          );
-        }
-      },
-      child: Scaffold(
-        appBar: AppBar(
-          leading: shouldShowBackToSelection ? const BackButton() : null,
-          title: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(isEditingSource ? 'Edit Daily Sale' : 'Add Daily Sale'),
-              Text(appBarTitleShop, style: Theme.of(context).textTheme.bodySmall),
-            ],
-          ),
-          actions: [
-            if (hasMultipleAssigned)
-              IconButton(
-                tooltip: 'Switch shop',
-                icon: const Icon(Icons.swap_horiz),
-                onPressed: _goToShopSelection,
-              ),
-            IconButton(
-              tooltip: 'Logout',
-              icon: const Icon(Icons.logout),
-              onPressed: _confirmLogout,
-            ),
+    return Scaffold(
+      appBar: AppBar(
+        // 🔙 Normal back button – sab roles ke liye
+        leading: navigator.canPop()
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back_ios_new_rounded),
+                onPressed: () => navigator.pop(),
+              )
+            : null,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(isEditingSource ? 'Edit Daily Sale' : 'Add Daily Sale'),
+            Text(appBarTitleShop, style: Theme.of(context).textTheme.bodySmall),
           ],
         ),
-        body: Padding(
-          padding: const EdgeInsets.all(16),
-          child: shopOptions.isEmpty && !isEditingSource
-              ? const Center(child: Text('No shop available to add a sale.'))
-              : Form(
-                  key: _formKey,
-                  child: ListView(
-                    children: [
-                      if (_isEmployee) _shopInfoCard(),
-                      if (_isEmployee) const SizedBox(height: 12),
+        actions: [
+          if (hasMultipleAssigned)
+            IconButton(
+              tooltip: 'Switch shop',
+              icon: const Icon(Icons.swap_horiz),
+              onPressed: _goToShopSelection,
+            ),
+          IconButton(
+            tooltip: 'Logout',
+            icon: const Icon(Icons.logout),
+            onPressed: _confirmLogout,
+          ),
+        ],
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: shopOptions.isEmpty && !isEditingSource
+            ? const Center(child: Text('No shop available to add a sale.'))
+            : Form(
+                key: _formKey,
+                child: ListView(
+                  children: [
+                    if (_isEmployee) _shopInfoCard(),
+                    if (_isEmployee) const SizedBox(height: 12),
 
-                      // Admin/Manager can change shop here; employee’s shop fixed
-                      if (!_isEmployee)
-                        DropdownButtonFormField<String>(
-                          value: (_selectedShop != null &&
-                                  shopOptions.contains(_selectedShop))
-                              ? _selectedShop
-                              : (shopOptions.isNotEmpty ? shopOptions.first : null),
-                          items: shopOptions
-                              .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-                              .toList(),
-                          onChanged: (v) async {
-                            setState(() => _selectedShop = v);
-                            await _prefillFromServer(_selectedDay); // reload fields
-                            // refresh yesterday availability (only matters if employee role changes later)
-                            await _refreshEmployeeDayOptions();
-                          },
-                          decoration: const InputDecoration(
-                            labelText: 'Shop',
-                            border: OutlineInputBorder(),
+                    // Admin/Manager can change shop here; employee’s shop fixed
+                    if (!_isEmployee)
+                      DropdownButtonFormField<String>(
+                        value: (_selectedShop != null &&
+                                shopOptions.contains(_selectedShop))
+                            ? _selectedShop
+                            : (shopOptions.isNotEmpty ? shopOptions.first : null),
+                        items: shopOptions
+                            .map((s) => DropdownMenuItem(value: s, child: Text(s)))
+                            .toList(),
+                        onChanged: (v) async {
+                          setState(() => _selectedShop = v);
+                          await _prefillFromServer(_selectedDay); // reload fields
+                          await _refreshEmployeeDayOptions();
+                        },
+                        decoration: const InputDecoration(
+                          labelText: 'Shop',
+                          border: OutlineInputBorder(),
+                        ),
+                        validator: (v) =>
+                            (v == null || v.isEmpty) ? 'Select a shop' : null,
+                      ),
+
+                    if (!_isEmployee) const SizedBox(height: 16),
+
+                    // ======== Date selection ========
+                    if (_isEmployee)
+                      _EmployeeDaySelector(
+                        day: _selectedDay,
+                        yesterdayEnabled: _yesterdayEnabled,
+                        onSelectToday: () => _setDayAndPrefill(_today),
+                        onSelectYesterday: () => _setDayAndPrefill(_yesterday),
+                      )
+                    else
+                      _DateStepper(
+                        day: _selectedDay,
+                        canGoPrev: _canGoPrev(_selectedDay),
+                        canGoNext: _canGoNext(_selectedDay),
+                        onPrev: () async {
+                          final d = _selectedDay.subtract(const Duration(days: 1));
+                          await _setDayAndPrefill(d);
+                        },
+                        onNext: () async {
+                          final d = _selectedDay.add(const Duration(days: 1));
+                          await _setDayAndPrefill(d);
+                        },
+                        onPick: () async {
+                          final limits = _pickerBounds();
+                          final picked = await showDatePicker(
+                            context: context,
+                            initialDate: _selectedDay,
+                            firstDate: limits.$1,
+                            lastDate: limits.$2,
+                          );
+                          if (picked != null) {
+                            await _setDayAndPrefill(picked);
+                          }
+                        },
+                      ),
+                    const SizedBox(height: 16),
+                    // =================================
+
+                    _amountField(_cashC, 'Cash'),
+                    const SizedBox(height: 12),
+                    _amountField(_cardC, 'Card'),
+                    const SizedBox(height: 12),
+                    _amountField(_otherC, 'Other'),
+
+                    const SizedBox(height: 16),
+                    _totalBar(total),
+
+                    const SizedBox(height: 18),
+                    _loading
+                        ? const Center(child: CircularProgressIndicator())
+                        : ElevatedButton.icon(
+                            icon: Icon(isEditingSource ? Icons.save : Icons.add),
+                            label: Text(isEditingSource ? 'Update Sale' : 'Add Sale'),
+                            onPressed:
+                                () => isEditingSource ? _updateSale() : _submitSale(),
                           ),
-                          validator: (v) =>
-                              (v == null || v.isEmpty) ? 'Select a shop' : null,
-                        ),
-
-                      if (!_isEmployee) const SizedBox(height: 16),
-
-                      // ======== Date selection ========
-                      if (_isEmployee)
-                        _EmployeeDaySelector(
-                          day: _selectedDay,
-                          yesterdayEnabled: _yesterdayEnabled,
-                          onSelectToday: () => _setDayAndPrefill(_today),
-                          onSelectYesterday: () => _setDayAndPrefill(_yesterday),
-                        )
-                      else
-                        _DateStepper(
-                          day: _selectedDay,
-                          canGoPrev: _canGoPrev(_selectedDay),
-                          canGoNext: _canGoNext(_selectedDay),
-                          onPrev: () async {
-                            final d = _selectedDay.subtract(const Duration(days: 1));
-                            await _setDayAndPrefill(d);
-                          },
-                          onNext: () async {
-                            final d = _selectedDay.add(const Duration(days: 1));
-                            await _setDayAndPrefill(d);
-                          },
-                          onPick: () async {
-                            final limits = _pickerBounds();
-                            final picked = await showDatePicker(
-                              context: context,
-                              initialDate: _selectedDay,
-                              firstDate: limits.$1,
-                              lastDate: limits.$2,
-                            );
-                            if (picked != null) {
-                              await _setDayAndPrefill(picked);
-                            }
-                          },
-                        ),
-                      const SizedBox(height: 16),
-                      // =================================
-
-                      _amountField(_cashC, 'Cash'),
-                      const SizedBox(height: 12),
-                      _amountField(_cardC, 'Card'),
-                      const SizedBox(height: 12),
-                      _amountField(_otherC, 'Other'),
-
-                      const SizedBox(height: 16),
-                      _totalBar(total),
-
-                      const SizedBox(height: 18),
-                      _loading
-                          ? const Center(child: CircularProgressIndicator())
-                          : ElevatedButton.icon(
-                              icon: Icon(isEditingSource ? Icons.save : Icons.add),
-                              label: Text(isEditingSource ? 'Update Sale' : 'Add Sale'),
-                              onPressed:
-                                  () => isEditingSource ? _updateSale() : _submitSale(),
-                            ),
-                    ],
-                  ),
+                  ],
                 ),
-        ),
+              ),
       ),
     );
   }
