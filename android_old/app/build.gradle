@@ -1,0 +1,98 @@
+// android/app/build.gradle  — Groovy, AGP 8.9.x compatible
+
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'com.google.gms.google-services'
+}
+
+def keystorePropsFile = rootProject.file("key.properties")
+def keystoreProps = new java.util.Properties()
+if (keystorePropsFile.exists()) {
+    keystoreProps.load(new java.io.FileInputStream(keystorePropsFile))
+}
+
+android {
+    namespace "com.ars.shopyapp"
+
+    // Plugins require 36
+    compileSdkVersion 36
+
+    defaultConfig {
+        applicationId "com.ars.shopyapp"
+        minSdkVersion 24
+        targetSdkVersion 36
+
+        versionCode 1
+        versionName "1.0"
+        multiDexEnabled true
+
+        // If your AndroidManifest.xml had applicationName = ${applicationName}, keep placeholder empty
+        // (or put your App class if you create one, e.g., "com.ars.shopyapp.App")
+        manifestPlaceholders = [ applicationName: "" ]
+    }
+
+    signingConfigs {
+        release {
+            if (keystorePropsFile.exists()) {
+                storeFile file("upload-keystore.jks")
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+
+                // AGP 8.x flags:
+                enableV1Signing true
+                enableV2Signing true
+                enableV3Signing true
+                enableV4Signing true
+            } else {
+                println("WARN: key.properties not found; release will be unsigned.")
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            // debug config if needed
+        }
+        release {
+            if (signingConfigs.release.storeFile != null) {
+                signingConfig signingConfigs.release
+            }
+            // Keep it simple while stabilizing
+            minifyEnabled false
+            shrinkResources false
+        }
+    }
+
+    // Lock Java 17 here too (primary path)
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = '17' }
+
+    // Optional but recommended
+    packagingOptions {
+        resources {
+            excludes += [
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE",
+                "META-INF/LICENSE.txt",
+                "META-INF/license.txt",
+                "META-INF/NOTICE",
+                "META-INF/NOTICE.txt",
+                "META-INF/notice.txt",
+                "META-INF/ASL2.0"
+            ]
+        }
+    }
+
+    lint { abortOnError = true }
+}
+
+dependencies {
+    implementation platform('com.google.firebase:firebase-bom:33.5.1')
+    implementation 'com.google.firebase:firebase-analytics-ktx'
+    // your other deps come via Flutter/Gradle
+}

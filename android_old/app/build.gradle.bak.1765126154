@@ -1,0 +1,85 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'com.google.gms.google-services'
+}
+
+def keystorePropsFile = rootProject.file("key.properties")
+def keystoreProps = new java.util.Properties()
+if (keystorePropsFile.exists()) {
+    keystoreProps.load(new java.io.FileInputStream(keystorePropsFile))
+}
+
+android {
+    namespace "com.ars.shopyapp"
+    compileSdkVersion 34
+
+    defaultConfig {
+        applicationId "com.ars.shopyapp"
+        minSdkVersion 23
+        targetSdkVersion 34
+        versionCode 1
+        versionName "1.0"
+        multiDexEnabled true
+    }
+
+    signingConfigs {
+        release {
+            if (keystorePropsFile.exists()) {
+                // JKS lives inside the :app module
+                storeFile file("upload-keystore.jks")
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            } else {
+                println("WARN: key.properties not found; release will be unsigned.")
+            }
+        }
+    }
+
+    // Flavors for public vs Clover
+    flavorDimensions "dist"
+    productFlavors {
+        public {
+            dimension "dist"
+            // uses targetSdkVersion 34 (from defaultConfig)
+        }
+        clover {
+            dimension "dist"
+            // Clover requirements (SDK <=29), plus 32-bit ABI
+            targetSdkVersion 29
+            ndk { abiFilters "armeabi-v7a" }
+        }
+    }
+
+    buildTypes {
+        debug {
+            // default debug config
+        }
+        release {
+            if (signingConfigs.release.storeFile != null) {
+                signingConfig signingConfigs.release
+            }
+            // Modern signing on for normal release
+            v1SigningEnabled true
+            v2SigningEnabled true
+            v3SigningEnabled true
+            v4SigningEnabled true
+            minifyEnabled false
+            shrinkResources false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = '17' }
+
+    lint { abortOnError = true }
+}
+
+dependencies {
+    implementation platform('com.google.firebase:firebase-bom:33.5.1')
+    implementation 'com.google.firebase:firebase-analytics-ktx'
+}

@@ -1,71 +1,109 @@
 import java.util.Properties
+import java.io.FileInputStream
 
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
+    id("kotlin-android")
     id("dev.flutter.flutter-gradle-plugin")
-    id("com.google.gms.google-services")
-}
-
-val keystoreProperties = Properties()
-// 🔧 path fix: file lives at android/key.properties
-val keystorePropertiesFile = rootProject.file("android/key.properties")
-if (keystorePropertiesFile.exists()) {
-    keystoreProperties.load(keystorePropertiesFile.inputStream())
 }
 
 android {
-    namespace = "com.ars.shopyapp"
-
-    // 🔧 SDKs: plugins ne 36 demand kiya tha
-    compileSdk = 36
-    ndkVersion = "27.0.12077973"
+    namespace = "com.ars.shopy_app"
+    compileSdk = flutter.compileSdkVersion
+    ndkVersion = flutter.ndkVersion
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+
+    kotlinOptions {
+        jvmTarget = JavaVersion.VERSION_11.toString()
+    }
+
+    // Load keystore props from android/key.properties
+    val keystoreProperties = Properties()
+    val keystorePropertiesFile = rootProject.file("key.properties") // android/key.properties
+    if (keystorePropertiesFile.exists()) {
+        keystoreProperties.load(FileInputStream(keystorePropertiesFile))
     }
 
     defaultConfig {
-        applicationId = "com.ars.shopyapp"
+        applicationId = "com.ars.shopy_app"
         minSdk = flutter.minSdkVersion
-        targetSdk = 36
+
+        // ✅ for normal Android build (Play/shareable)
+        targetSdk = flutter.targetSdkVersion
+
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
 
-    val hasKeys = keystoreProperties.containsKey("storeFile")
+    // ✅ Flavors
+    flavorDimensions += "env"
+    productFlavors {
+        create("standard") {
+            dimension = "env"
+            // standard = normal Android
+            targetSdk = flutter.targetSdkVersion
+        }
+
+        create("clover") {
+            dimension = "env"
+            // clover = strict requirements
+            targetSdk = 29
+        }
+    }
+
+    // ✅ Prevent Clover release from failing due to targetSdk 29 lint
+    lint {
+        abortOnError = false
+        checkReleaseBuilds = false
+        disable.add("ExpiredTargetSdkVersion")
+    }
 
     signingConfigs {
-        if (hasKeys) {
-            create("release") {
-                keyAlias = keystoreProperties["keyAlias"] as String
-                keyPassword = keystoreProperties["keyPassword"] as String
-                storeFile = file(keystoreProperties["storeFile"] as String)
-                storePassword = keystoreProperties["storePassword"] as String
+        create("release") {
+            val storeFilePath = keystoreProperties.getProperty("storeFile")
+            if (!storeFilePath.isNullOrBlank()) storeFile = file(storeFilePath)
 
-                // ✅ Enable ALL schemes
-                enableV1Signing = true   // pre-Nougat support
-                enableV2Signing = true   // Android 7+
-                enableV3Signing = true   // Android 9+
-                enableV4Signing = true   // optional (incremental)
-            }
+            storePassword = keystoreProperties.getProperty("storePassword")
+            keyAlias = keystoreProperties.getProperty("keyAlias")
+            keyPassword = keystoreProperties.getProperty("keyPassword")
         }
     }
 
     buildTypes {
         release {
-            if (hasKeys) signingConfig = signingConfigs.getByName("release")
-            // isMinifyEnabled = true
-            // isShrinkResources = true
-            // proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.getByName("release")
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
-        debug { /* default */ }
+    }
+
+    // ✅ Variant-wise signing scheme control
+    // standard: v2/v3 ON (normal)
+    // clover:   v1 ON, v2/v3 OFF
+    androidComponents {
+        onVariants { variant ->
+            val isClover = variant.flavorName == "clover"
+            variant.packaging.jniLibs.useLegacyPackaging.set(isClover) // optional help for old devices
+
+            variant.signingConfig?.let { sc ->
+                if (isClover) {
+                    sc.enableV1Signing.set(true)
+                    sc.enableV2Signing.set(false)
+                    sc.enableV3Signing.set(false)
+                } else {
+                    sc.enableV1Signing.set(true)
+                    sc.enableV2Signing.set(true)
+                    sc.enableV3Signing.set(true)
+                }
+            }
+        }
     }
 }
 
-tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
-    kotlinOptions { jvmTarget = "17" }
+flutter {
+    source = "../.."
 }
-
-flutter { source = "../.." }

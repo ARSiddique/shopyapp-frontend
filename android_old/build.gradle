@@ -1,0 +1,82 @@
+// android/build.gradle  — Root build for the Android folder
+
+buildscript {
+  repositories { google(); mavenCentral() }
+  dependencies {
+    // Google services plugin for Firebase
+    classpath 'com.google.gms:google-services:4.4.2'
+  }
+}
+
+/** Legacy-style map so older Flutter plugins can read SDK levels */
+ext {
+  flutter = [
+    compileSdkVersion: 36,   // <-- bump to 36 for plugins requiring 36
+    targetSdkVersion : 36,
+    minSdkVersion    : 24,   // <-- Flutter warning said 23 will be dropped
+  ]
+}
+
+/**
+ * Force SDK + Java/Kotlin across ALL subprojects (including Android plugins)
+ * so no module compiles with Java 11 while Kotlin targets 17.
+ */
+subprojects { project ->
+  afterEvaluate {
+    if (project.plugins.hasPlugin("com.android.application")
+        || project.plugins.hasPlugin("com.android.library")) {
+
+      project.android {
+        // Unify SDKs
+        compileSdkVersion rootProject.ext.flutter.compileSdkVersion
+
+        if (project.android.hasProperty("defaultConfig")) {
+          project.android.defaultConfig {
+            if (it.hasProperty("minSdkVersion"))
+              minSdkVersion rootProject.ext.flutter.minSdkVersion
+            if (it.hasProperty("targetSdkVersion"))
+              targetSdkVersion rootProject.ext.flutter.targetSdkVersion
+          }
+        }
+
+        // Unify Java 17 for Android DSL (primary path)
+        if (project.android.hasProperty("compileOptions")) {
+          project.android.compileOptions {
+            sourceCompatibility JavaVersion.VERSION_17
+            targetCompatibility JavaVersion.VERSION_17
+          }
+        }
+      }
+
+      // Unify Kotlin 17 (primary path)
+      if (project.hasProperty("kotlinOptions")) {
+        project.kotlinOptions { jvmTarget = '17' }
+      }
+    }
+  }
+
+  // Hard-lock **all** JavaCompile tasks to 17 (saves you from plugins that ignore compileOptions)
+  tasks.withType(JavaCompile).configureEach {
+    sourceCompatibility = JavaVersion.VERSION_17.toString()
+    targetCompatibility = JavaVersion.VERSION_17.toString()
+    // DO NOT set options.release (AGP warns against it for Android)
+  }
+
+  // Hard-lock all KotlinCompile to 17 as well
+  tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+    kotlinOptions { jvmTarget = '17' }
+  }
+
+  // If Kotlin plugin supports toolchains, prefer JDK 17 toolchain (safe no-op if not present)
+  plugins.withId("org.jetbrains.kotlin.android") {
+    try {
+      extensions.configure(
+        org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension
+      ) { jvmToolchain(17) }
+    } catch (ignored) { }
+  }
+}
+
+allprojects { repositories { google(); mavenCentral() } }
+
+task clean(type: Delete) { delete rootProject.buildDir }

@@ -1,0 +1,96 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'com.google.gms.google-services'
+}
+
+def keystorePropsFile = rootProject.file("key.properties")
+def keystoreProps = new java.util.Properties()
+if (keystorePropsFile.exists()) {
+    keystoreProps.load(new java.io.FileInputStream(keystorePropsFile))
+}
+
+android {
+    namespace "com.ars.shopyapp"
+    compileSdkVersion 34
+
+    defaultConfig {
+        applicationId "com.ars.shopyapp"
+        minSdkVersion 23
+        targetSdkVersion 34
+        versionCode 1
+        versionName "1.0"
+        multiDexEnabled true
+    }
+
+    signingConfigs {
+        release {
+            if (keystorePropsFile.exists()) {
+                // JKS is inside :app module root
+                storeFile file("upload-keystore.jks")
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            } else {
+                println("WARN: key.properties not found; release will be unsigned.")
+            }
+        }
+    }
+
+    // Flavors for public vs Clover
+    flavorDimensions "dist"
+    productFlavors {
+        public {
+            dimension "dist"
+            // uses targetSdkVersion 34 (defaultConfig)
+        }
+        clover {
+            dimension "dist"
+            // Clover needs <= 29 + V1 signing
+            targetSdkVersion 29
+            ndk { abiFilters "armeabi-v7a" }
+        }
+    }
+
+    buildTypes {
+        // Normal release (Play/Shareable) — modern signing
+        release {
+            if (signingConfigs.release.storeFile != null) {
+                signingConfig signingConfigs.release
+            }
+            v1SigningEnabled true
+            v2SigningEnabled true
+            v3SigningEnabled true
+            v4SigningEnabled true
+            minifyEnabled false
+            shrinkResources false
+        }
+
+        // Clover release — V1 ONLY
+        cloverRelease {
+            initWith(release)
+            if (signingConfigs.release.storeFile != null) {
+                signingConfig signingConfigs.release
+            }
+            v1SigningEnabled true
+            v2SigningEnabled false
+            v3SigningEnabled false
+            v4SigningEnabled false
+            minifyEnabled false
+            shrinkResources false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = '17' }
+
+    lint { abortOnError = true }
+}
+
+dependencies {
+    implementation platform('com.google.firebase:firebase-bom:33.5.1')
+    implementation 'com.google.firebase:firebase-analytics-ktx'
+}
